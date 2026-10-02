@@ -1,0 +1,57 @@
+% ---------------------------------------------------------------------------
+% Notatki do kursu "Własny procesor RISC-V w SystemVerilogu"
+% Budowanie: make   (pdflatex przez latexmk)
+% ---------------------------------------------------------------------------
+\documentclass[11pt,a4paper,oneside,parskip=half,headings=standardclasses,
+  chapterprefix=true,numbers=noenddot]{scrbook}
+\usepackage{kurs}
+
+\hypersetup{pdftitle={Własny procesor RISC-V w SystemVerilogu --- notatki},
+  pdfauthor={Kurs CPU Verilog}}
+
+\begin{document}
+\frontmatter
+\begin{titlepage}
+  \centering
+  \vspace*{3cm}
+  {\sffamily\color{szary}\large NOTATKI DO KURSU\par}
+  \vspace{0.6cm}
+  {\sffamily\bfseries\color{akcent}\fontsize{30}{36}\selectfont
+    Własny procesor RISC-V\\[4pt] w SystemVerilogu\par}
+  \vspace{0.8cm}
+  {\large Od bramek logicznych do 5-etapowego potoku,\\
+    na którym uruchamiasz programy w C\par}
+  \vspace{2cm}
+  \begin{tikzpicture}[scale=0.9, every node/.style={font=\sffamily\scriptsize}]
+    \foreach \n/\l [count=\i] in {IF/pobierz, ID/dekoduj, EX/wykonaj, MEM/pamięć, WB/zapisz} {
+      \node[blok, minimum width=18mm, minimum height=11mm] (s\i) at ({2.6*\i},0) {\textbf{\n}\\\l};
+    }
+    \foreach \i [evaluate=\i as \j using int(\i+1)] in {1,...,4} {
+      \draw[->, thick, akcent] (s\i) -- (s\j);
+    }
+  \end{tikzpicture}
+  \vfill
+  {\sffamily\small\color{szary} Kod kursu: \texttt{\textasciitilde/Pulpit/kurs-cpu-verilog}\\
+  Wersja z \today\par}
+\end{titlepage}
+
+\tableofcontents
+
+\mainmatter
+\input{rozdzialy/wstep}
+\setcounter{chapter}{-1}
+\input{rozdzialy/r00-start}
+\input{rozdzialy/r01-kombinacyjna}
+\input{rozdzialy/r02-sekwencyjna}
+\input{rozdzialy/r03-alu-regfile}
+\input{rozdzialy/r04-isa}
+\input{rozdzialy/r05-single-cycle}
+\input{rozdzialy/r06-weryfikacja}
+\input{rozdzialy/r07-c}
+\input{rozdzialy/r08-pipeline}
+\input{rozdzialy/r09-dalej}
+
+\appendix
+\input{rozdzialy/dodatki}
+
+\end{document}

@@ -1,0 +1,286 @@
+\chapter{Procesor potokowy}
+\label{ch:pipe}
+
+\metryczka{przerobić procesor jednocyklowy na klasyczny 5-etapowy potok z obsługą
+wszystkich hazardów i zmierzyć, co to dało. Najtrudniejszy i najciekawszy
+rozdział kursu.}{4--6 wieczorów}{08-pipeline/}
+
+% Diagram potoku: \instr{wiersz}{pierwszy takt}{etap1,etap2,...}{mnemonik}
+\newcommand{\instr}[4]{%
+  \node[anchor=east, font=\ttfamily\scriptsize] at (0.9,-#1) {#4};
+  \foreach \s [count=\k from 0] in {#3} {
+    \ifx\s\empty\else
+    \pgfmathsetmacro{\xx}{#2+\k}
+    \node[draw, thick, minimum width=9.5mm, minimum height=5mm, inner sep=0pt,
+      font=\sffamily\scriptsize, fill=akcentjasny] at (\xx,-#1) {\s};
+    \fi
+  }}
+\newcommand{\banka}[2]{% bańka: wiersz, takt
+  \node[draw, thick, dashed, minimum width=9.5mm, minimum height=5mm, inner sep=0pt,
+    font=\sffamily\tiny, fill=white, text=szary] at (#2,-#1) {bańka};}
+\newcommand{\takty}[1]{%
+  \foreach \t in {1,...,#1} { \node[font=\sffamily\scriptsize, text=szary] at (\t+1,0.6) {\t}; }}
+
+\section{Po co potok?}
+
+Czas wykonania programu („żelazne prawo” wydajności procesora):
+\[ \text{czas} \;=\; \text{liczba instrukcji} \times \text{CPI} \times T_{clk}. \]
+
+Procesor jednocyklowy ma CPI = 1, ale bardzo długi takt. Potok tnie drogę
+instrukcji rejestrami na 5 krótszych etapów. Każda instrukcja nadal potrzebuje 5
+etapów, więc \emph{opóźnienie} pojedynczej instrukcji się nie zmienia. Ale \textbf{w
+każdym takcie kończy się jedna instrukcja}, a takt może być kilka razy krótszy.
+
+\begin{figure}[h]
+\centering
+\begin{tikzpicture}[x=10.5mm, y=7mm]
+  \takty{8}
+  \instr{1}{2}{IF,ID,EX,MEM,WB}{add x1,..}
+  \instr{2}{3}{IF,ID,EX,MEM,WB}{sub x2,..}
+  \instr{3}{4}{IF,ID,EX,MEM,WB}{lw x3,..}
+  \instr{4}{5}{IF,ID,EX,MEM,WB}{beq ..}
+  \draw[pulapka, thick, rounded corners] (5.5,0.3) rectangle (6.5,-4.4);
+  \node[etykieta, text=pulapka, align=center] at (6,-4.9) {w takcie 5 pracują\\wszystkie etapy};
+\end{tikzpicture}
+\caption{Idealny potok: od piątego taktu kończy się jedna instrukcja na takt.}
+\label{fig:pipe}
+\end{figure}
+
+Cena: instrukcje „zachodzą” na siebie i zależności między nimi trzeba obsłużyć
+w sprzęcie. To są \textbf{hazardy}.
+
+\section{Etapy i rejestry potoku}
+
+\begin{center}
+\small
+\begin{tabularx}{\linewidth}{@{}l X X@{}}
+\toprule
+\textbf{Etap} & \textbf{Co robi} & \textbf{Rejestr na końcu etapu} \\
+\midrule
+IF & \code{imem\_addr = pc}, pobranie instrukcji, \code{pc += 4} & IF/ID: \code{d\_valid, d\_pc, d\_instr} \\
+ID & dekoder, immediate, odczyt rejestrów, wykrycie load-use & ID/EX: sterowanie, \code{rs1\_val, rs2\_val, imm}, numery rs1/rs2/rd \\
+EX & forwarding, ALU, \code{branch\_cmp}, cel skoku, \textbf{redirect} & EX/MEM: wynik, dana do store, rd \\
+MEM & LSU i pamięć danych & MEM/WB: wartość do zapisu, rd \\
+WB & zapis do banku rejestrów, \textbf{commit} & --- \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\begin{figure}[h]
+\centering
+\begin{tikzpicture}[x=1cm, y=1cm, every node/.append style={font=\sffamily\scriptsize}]
+  \foreach \x/\n in {0/IF, 2.9/ID, 5.8/EX, 8.7/MEM, 11.6/WB} {
+    \node[blok, minimum width=17mm, minimum height=14mm] (\n) at (\x,0) {\n};
+  }
+  \foreach \x/\n/\r in {1.45/{IF/ID}/ra, 4.35/{ID/EX}/rb, 7.25/{EX/MEM}/rc, 10.15/{MEM/WB}/rd} {
+    \node[draw, thick, fill=zadaniejasny, minimum width=3.5mm, minimum height=22mm] (\r) at (\x,0) {};
+    \node[etykieta] at (\x,1.4) {\n};
+  }
+  \draw[->, thick] (IF) -- (ra); \draw[->, thick] (ra) -- (ID);
+  \draw[->, thick] (ID) -- (rb); \draw[->, thick] (rb) -- (EX);
+  \draw[->, thick] (EX) -- (rc); \draw[->, thick] (rc) -- (MEM);
+  \draw[->, thick] (MEM) -- (rd); \draw[->, thick] (rd) -- (WB);
+  % redirect
+  \draw[->, thick, pulapka] (EX.north) -- ++(0,1.25) -| node[above, pos=0.25]{redirect (skok wzięty)} (IF.north);
+  % forwarding
+  \draw[->, thick, zadanie] ($(rc.south)$) -- ++(0,-0.6) -| node[below, pos=0.3]{EX/MEM → EX} ($(EX.south)+(0.3,0)$);
+  \draw[->, thick, zadanie] ($(rd.south)$) -- ++(0,-1.1) -| node[below, pos=0.2]{MEM/WB → EX} ($(EX.south)+(-0.3,0)$);
+  % zapis rejestru
+  \draw[->, thick, akcent] (WB.north) -- ++(0,1.85) -| node[above, pos=0.25]{zapis rd (+ bypass WB → ID)} (ID.north);
+\end{tikzpicture}
+\caption{Pięć etapów, cztery rejestry potoku. Czerwony: redirect przy skoku.
+Zielone: ścieżki forwardingu. Niebieski: zapis do banku rejestrów.}
+\label{fig:pipeline}
+\end{figure}
+
+\paragraph{Konwencje} (zgodne ze szkieletem \plik{rtl/core.sv}): przedrostek
+\code{d\_} oznacza sygnał w ID, \code{e\_} w EX, \code{m\_} w MEM, a \code{w\_} w WB.
+Każdy etap ma bit \code{*\_valid}. \textbf{Bańka} (\emph{bubble}) to etap z
+\code{valid = 0} i wyzerowanymi sygnałami, które mają skutki uboczne
+(\code{reg\_write}, \code{mem\_write}, \code{branch}, \code{jump} \dots). Przepływa
+przez potok jak \code{nop}, ale nie jest raportowana jako commit.
+
+\paragraph{Commit z WB.} \code{commit\_valid = w\_valid}, a opis instrukcji
+(\code{pc}, \code{instr}) jedzie przez cały potok. Dzięki temu ślad jest identyczny
+jak w emulatorze i \code{make cosim} działa bez zmian.
+
+\section{Hazardy danych}
+
+\begin{figure}[h]
+\centering
+\begin{tikzpicture}[x=10.5mm, y=7mm]
+  \takty{6}
+  \instr{1}{2}{IF,ID,EX,MEM,WB}{add x1,x2,x3}
+  \instr{2}{3}{IF,ID,EX,MEM,WB}{sub x4,x1,x5}
+  \draw[->, very thick, pulapka] (6,-1.3) .. controls (5.5,-1.7) and (4.6,-1.6) .. (4.1,-1.75);
+  \node[etykieta, text=pulapka, anchor=west] at (7.7,-1) {x1 zapisany na końcu WB (takt 5)};
+  \node[etykieta, text=pulapka, anchor=west] at (7.7,-2) {a czytany w ID już w takcie 3!};
+\end{tikzpicture}
+\caption{Hazard RAW (\emph{read after write}).}
+\end{figure}
+
+Rozwiązania, od najprostszego:
+\begin{enumerate}
+  \item \textbf{Programowo}: \code{nop}-y między zależnymi instrukcjami. Tak
+    działa \code{make progs PAD=n} (\code{rvtool --pad-nops}) na etapie 8.1.
+  \item \textbf{Bypass WB → ID}: gdy WB w tym samym takcie zapisuje rejestr, który
+    ID czyta, weź wartość prosto z WB (bank rejestrów oddałby starą).
+  \item \textbf{Forwarding do EX}: wynik \code{add} istnieje już na końcu EX.
+    Następna instrukcja potrzebuje go na \emph{początku} swojego EX, czyli takt
+    później. Przekaż go z rejestru EX/MEM albo MEM/WB prosto na wejście ALU.
+  \item \textbf{Stall} przy \emph{load-use} (niżej).
+\end{enumerate}
+
+\begin{figure}[h]
+\centering
+\begin{tikzpicture}[x=10.5mm, y=7mm]
+  \takty{6}
+  \instr{1}{2}{IF,ID,EX,MEM,WB}{add x1,x2,x3}
+  \instr{2}{3}{IF,ID,EX,MEM,WB}{sub x4,x1,x5}
+  \instr{3}{4}{IF,ID,EX,MEM,WB}{or  x6,x1,x7}
+  \draw[->, very thick, zadanie] (4.45,-1.2) -- (4.55,-1.8);
+  \draw[->, very thick, zadanie] (5.45,-1.2) .. controls (5.6,-2.2) .. (5.55,-2.8);
+  \node[etykieta, text=zadanie, anchor=west] at (8.8,-1.6) {EX/MEM → EX (odległość 1)};
+  \node[etykieta, text=zadanie, anchor=west] at (8.8,-2.6) {MEM/WB → EX (odległość 2)};
+\end{tikzpicture}
+\caption{Forwarding: wynik z rejestru potoku wraca prosto na wejście ALU.}
+\end{figure}
+
+\begin{sv}
+always_comb begin
+  if (m_valid && m_reg_write && m_rd != 0 && m_rd == e_rs1)  fwd_a = m_result; // najnowszy!
+  else if (w_valid && w_reg_write && w_rd != 0 && w_rd == e_rs1) fwd_a = w_val;
+  else                                                     fwd_a = e_rs1_val;
+  // to samo dla fwd_b; fwd_b jest też daną dla store!
+end
+\end{sv}
+
+\begin{pulapka}[Trzy szczegóły forwardingu]
+(1) \textbf{Kolejność}: gdy oba etapy piszą ten sam rejestr, wygrywa
+\emph{nowszy}, czyli EX/MEM (test \code{11\_hazards}, podtest 4).
+(2) \textbf{\code{rd != 0}}: zapis do \code{x0} nie może być forwardowany
+(podtest 8). (3) Dana do \textbf{store} (\code{rs2}) też musi przejść przez
+forwarding.
+\end{pulapka}
+
+\subsection*{Load-use: jedyny przypadek, gdy trzeba czekać}
+
+\begin{figure}[h]
+\centering
+\begin{tikzpicture}[x=10.5mm, y=7mm]
+  \takty{7}
+  \instr{1}{2}{IF,ID,EX,MEM,WB}{lw  x1,0(x2)}
+  \instr{2}{3}{IF,ID,ID,EX,MEM,WB}{add x3,x1,x1}
+  \banka{3}{5}
+  \node[etykieta, anchor=west] at (5.6,-3) {bańka wstawiona do ID/EX};
+  \draw[->, very thick, zadanie] (5.45,-1.2) -- (5.55,-1.8);
+  \node[etykieta, text=zadanie, anchor=west] at (8.1,-1.4) {dana z pamięci jest dopiero po MEM};
+\end{tikzpicture}
+\caption{Load-use: instrukcja zależna czeka jeden takt w ID, a potem dostaje daną przez forwarding z MEM/WB.}
+\end{figure}
+
+Wykrywasz to w ID: w EX jest load, a jego \code{rd} to \code{rs1} albo \code{rs2}
+instrukcji w ID. Wtedy \textbf{PC i IF/ID stoją}, a do ID/EX idzie bańka.
+
+\section{Hazardy sterowania}
+
+Skok rozstrzyga się w EX. Do tego czasu IF i ID zdążyły pobrać dwie instrukcje
+„za skokiem”. Jeśli skok jest wzięty: \code{pc = cel}, a instrukcje w IF/ID i
+ID/EX trzeba \textbf{unieważnić} (\emph{flush}).
+
+\begin{figure}[h]
+\centering
+\begin{tikzpicture}[x=10.5mm, y=7mm]
+  \takty{7}
+  \instr{1}{2}{IF,ID,EX,MEM,WB}{beq (wzięty)}
+  \instr{2}{3}{IF,ID}{inst+4}
+  \instr{3}{4}{IF}{inst+8}
+  \instr{4}{5}{IF,ID,EX,MEM,WB}{cel skoku}
+  \draw[pulapka, very thick] (2.55,-1.75) -- (3.45,-2.25) (2.55,-2.25) -- (3.45,-1.75);
+  \draw[pulapka, very thick] (3.55,-1.75) -- (4.45,-2.25) (3.55,-2.25) -- (4.45,-1.75);
+  \draw[pulapka, very thick] (3.55,-2.75) -- (4.45,-3.25) (3.55,-3.25) -- (4.45,-2.75);
+  \node[etykieta, text=pulapka, anchor=west] at (6.8,-2.5) {unieważnione: kara 2 takty};
+\end{tikzpicture}
+\caption{Wzięty skok: dwie instrukcje pobrane „na ślepo” zamieniają się w bańki.}
+\end{figure}
+
+Strategia „zakładaj, że skok nie będzie wzięty” to najprostsza predykcja skoków.
+\textbf{Priorytety}: gdy w jednym takcie jest i redirect, i stall, wygrywa redirect,
+bo czekająca instrukcja i tak zostanie unieważniona.
+
+\section{Plan pracy}
+
+Szkielet \plik{rtl/core.sv} ma sekcje dla etapów. Pracuj etapami i commituj po
+każdym, który działa.
+
+\begin{center}
+\small
+\begin{tabularx}{\linewidth}{@{}l X l@{}}
+\toprule
+\textbf{Etap} & \textbf{Co dodajesz} & \textbf{Test} \\
+\midrule
+8.1 & rejestry potoku, bity \code{valid}, redirect i flush przy skokach & \code{make progs PAD=4} \\
+8.2 & forwarding EX/MEM→EX i MEM/WB→EX (oba operandy i dana do store), bypass WB→ID & \code{make progs PAD=1} \\
+8.3 & stall load-use & \code{make progs} \\
+8.4 & weryfikacja & \code{make cosim}, \code{make fuzz N=200} \\
+8.5 & pomiary: CPI, synteza & \code{make synth T=core} \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\code{PAD=n} wstawia $n$ instrukcji \code{nop} \emph{przed} każdą instrukcją. Etykiety
+wskazują na pierwszy z nich, żeby adresy powrotu \code{jal} się zgadzały. Przy
+\code{PAD=4} żadna zależność danych nie jest groźna.
+
+\section{Zadania}
+
+\begin{zadanie}{8.1 --- Potok bez obsługi hazardów danych}
+\code{make progs PAD=4}. Jaki jest najmniejszy PAD, przy którym Twój potok z
+etapu 8.1 przechodzi wszystkie testy? Wylicz to z diagramu potoku, zanim
+sprawdzisz. Jak zmienia się ta liczba po dodaniu samego bypassu WB→ID?
+\end{zadanie}
+
+\begin{zadanie}{8.2 --- Forwarding i bypass}
+\code{make progs PAD=1}. Dlaczego przy \code{PAD=0} nadal coś pada? Które testy i
+dlaczego akurat te?
+\end{zadanie}
+
+\begin{zadanie}{8.3 --- Stall load-use}
+\code{make progs}: 12 × PASS bez żadnych \code{nop}-ów.
+\end{zadanie}
+
+\begin{zadanie}{8.4 --- Weryfikacja}
+\code{make cosim}, \code{make fuzz N=200}, a także
+\code{make -C ../06-weryfikacja fuzz CORE=08 N=1000 SIM=verilator} i
+\code{make -C ../07-c-bare-metal test CORE=08}. Fuzzer jest tu naprawdę cenny:
+losowe programy tworzą kombinacje zależności, skoków i loadów, których nie ma w
+ręcznych testach.
+\end{zadanie}
+
+\begin{zadanie}{8.5 --- Pomiary}
+Porównaj CPI z \code{make progs} z rozdziałem 5 (zawsze 1,000). Na rozwiązaniu
+wzorcowym \code{09\_sort} ma CPI ok.\ 1,5, a \code{bench} z rozdziału 7 ok.\ 1,3. Ile
+taktów zabierają skoki, a ile load-use? Potem \code{make synth T=core} tu i w
+rozdziale 5. Który etap ma teraz najdłuższą ścieżkę? (Podpowiedź: EX, czyli
+forwarding, ALU, decyzja o skoku i multiplekser PC.)
+\end{zadanie}
+
+\begin{zadanie}{8.6 --- Dla ambitnych}
+Skoki rozstrzygane w ID (kara 1 takt, ale potrzebny forwarding do ID i nowy
+stall); statyczna predykcja BTFN (skoki wstecz zakładamy jako wzięte);
+predyktor dynamiczny z 2-bitowymi licznikami i BTB. Mierz CPI na \code{bench}.
+\end{zadanie}
+
+\begin{gotowe}
+\code{make progs} → 12 × PASS przy \code{PAD=0}, \code{make cosim} → wszystko
+ZGODNE, \code{make fuzz N=500} → 0 różnic, a \code{bench} z rozdziału 7 działa na
+\code{CORE=08}.
+\end{gotowe}
+
+\begin{kontrolne}
+  \item Dlaczego potok skraca czas wykonania programu, choć każda instrukcja trwa tyle samo albo dłużej?
+  \item Narysuj diagram potoku dla \code{lw x1,0(x2); sw x1,4(x2)}. Czy potrzebny jest stall?
+  \item Dlaczego przy forwardingu EX/MEM ma pierwszeństwo przed MEM/WB?
+  \item Ile taktów traci potok na wziętym skoku i jak to zmniejszyć?
+  \item Co się stanie, jeśli przy stallu zapomnisz zatrzymać rejestr IF/ID (tylko PC)?
+\end{kontrolne}

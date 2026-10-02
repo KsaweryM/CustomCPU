@@ -1,0 +1,307 @@
+\chapter{Logika sekwencyjna i automaty stanów}
+\label{ch:sekw}
+
+\metryczka{rejestry, czas w układzie synchronicznym, pamięci i automaty
+skończone. Procesor to w gruncie rzeczy wielki automat: jego stanem są PC,
+rejestry i pamięć.}{2--3 wieczory}{02-sekwencyjna/}
+
+\section{Przerzutnik i \texttt{always\_ff}}
+
+\begin{sv}
+always_ff @(posedge clk) q <= d;
+\end{sv}
+
+Na każdym zboczu narastającym \code{clk} przerzutnik zapamiętuje \code{d}.
+Między zboczami \code{q} się nie zmienia, cokolwiek dzieje się z \code{d}.
+
+\subsection*{Dlaczego przypisanie nieblokujące \texttt{<=}?}
+
+\code{<=} oznacza: \emph{oblicz prawą stronę teraz, przypisz na końcu
+kroku czasowego}. Wszystkie \code{<=} w całym układzie widzą więc \emph{stare}
+wartości, dokładnie tak jak prawdziwe przerzutniki taktowane jednym zegarem:
+
+\begin{sv}
+always_ff @(posedge clk) begin   // rejestr przesuwny 3-bitowy
+  a <= in;
+  b <= a;                        // stare a
+  c <= b;                        // stare b
+end
+
+always_ff @(posedge clk) begin   // zamiana wartości: działa!
+  x <= y;
+  y <= x;
+end
+\end{sv}
+
+\begin{pulapka}[\texttt{=} w \texttt{always\_ff}]
+Z \code{=} linia \code{b = a} widziałaby \emph{nowe} \code{a} i rejestr
+przesuwny zapadłby się w jeden przerzutnik. Przy kilku blokach \code{always}
+wynik zależałby od kolejności ich wykonania przez symulator. Zasada bez
+wyjątków: \textbf{w \code{always\_ff} tylko \code{<=}}.
+\end{pulapka}
+
+\subsection*{Rejestr z zezwoleniem i resetem}
+
+\begin{sv}
+always_ff @(posedge clk) begin
+  if (rst)     q <= '0;      // reset synchroniczny: działa tylko na zboczu
+  else if (en) q <= d;       // en = 0: q <= q
+end
+\end{sv}
+
+\begin{figure}[h]
+\centering
+\begin{tikzpicture}
+  \pic (m1) at (0,0) {muks};
+  \pic (m2) at (2.2,0) {muks};
+  \node[draw, thick, fill=zadaniejasny, minimum width=11mm, minimum height=14mm, font=\sffamily\scriptsize] (ff) at (4.6,0) {D\quad Q};
+  \draw[<-, thick] (m1-in1) -- ++(-8mm,0) node[left, sygnal]{d};
+  \draw[<-, thick] (m1-sel) -- ++(0,-6mm) node[below, sygnal]{en};
+  \draw[->, thick] (m1-out) -- ++(5mm,0) |- (m2-in0);
+  \draw[<-, thick] (m2-in1) -- ++(-5mm,0) node[left, sygnal]{0};
+  \draw[<-, thick] (m2-sel) -- ++(0,-6mm) node[below, sygnal]{rst};
+  \draw[->, thick] (m2-out) -- (ff.west);
+  \draw[->, thick] (ff.east) -- ++(10mm,0) node[right, sygnal]{q};
+  \draw[thick] ($(ff.east)+(4mm,0)$) -- ++(0,-19mm) -| ($(m1-in0)+(-6mm,0)$) -- (m1-in0);
+  \draw[<-, thick] (ff.north) -- ++(0,6mm) node[above, sygnal]{clk};
+\end{tikzpicture}
+\caption{Rejestr z resetem synchronicznym i zezwoleniem: dwa multipleksery i przerzutnik D.}
+\label{fig:regen}
+\end{figure}
+
+Sprzętowo (rys.~\ref{fig:regen}) to przerzutnik D z dwoma multiplekserami
+przed nim. Biblioteki FPGA i ASIC mają gotowe przerzutniki z wejściem
+\emph{enable} (\code{\$\_SDFFE\_} z rozdziału~\ref{ch:start}).
+
+\paragraph{Reset synchroniczny czy asynchroniczny?} Asynchroniczny
+(\code{always\_ff @(posedge clk or posedge rst)}) działa bez zegara, ale
+komplikuje analizę czasową przy zdejmowaniu resetu. W kursie używamy tylko
+synchronicznego, który na FPGA jest standardem.
+
+\paragraph{Wartości początkowe.} Na FPGA przerzutniki dostają wartości z
+bitstreamu, więc \code{initial} i \code{logic q = 0;} są syntezowalne. W ASIC
+po włączeniu zasilania stan jest losowy i tylko reset daje pewność. Dlatego
+wszystko, co musi mieć znaną wartość (PC, stan automatu, bity \code{valid}),
+resetujemy jawnie.
+
+\section{Czas w układzie synchronicznym}
+
+\begin{figure}[h]
+\centering
+\begin{tikzpicture}
+  \node[draw, thick, fill=zadaniejasny, minimum width=10mm, minimum height=12mm, font=\sffamily\scriptsize] (f1) at (0,0) {FF1};
+  \node[blok, minimum width=34mm, minimum height=12mm] (c) at (4,0) {logika\\kombinacyjna};
+  \node[draw, thick, fill=zadaniejasny, minimum width=10mm, minimum height=12mm, font=\sffamily\scriptsize] (f2) at (8,0) {FF2};
+  \draw[->, thick] (f1) -- node[above, etykieta]{$t_{clk\to q}$} (c);
+  \draw[->, thick] (c) -- node[above, etykieta]{$t_{comb}$} (f2);
+  \draw[thick] (0,-1.5) -- (8,-1.5);
+  \draw[->, thick] (0,-1.5) -- (f1.south);
+  \draw[->, thick] (8,-1.5) -- (f2.south);
+  \node[sygnal, below] at (4,-1.5) {clk};
+\end{tikzpicture}
+\caption{Ścieżka między dwoma rejestrami.}
+\label{fig:timing}
+\end{figure}
+
+Żeby FF2 poprawnie zapamiętał wynik, sygnał musi do niego dotrzeć przed
+zboczem z zapasem $t_{setup}$:
+\[ T_{clk} \;\geq\; t_{clk\to q} + t_{comb}^{max} + t_{setup}. \]
+
+Najdłuższa ścieżka kombinacyjna między dwoma rejestrami (\textbf{ścieżka
+krytyczna}) wyznacza maksymalną częstotliwość zegara. Tak wygląda
+„złożoność obliczeniowa” sprzętu: nie liczba operacji, tylko \emph{głębokość
+logiki między rejestrami}. Za długą ścieżkę można przeciąć rejestrem. Na tym
+polega \textbf{potokowanie} (rozdział~\ref{ch:pipe}).
+
+W symulacji RTL czasów nie ma, bo logika „liczy się w zerowym czasie”. O
+timing dbają synteza i place\&route. Przybliżenie pokazuje \code{make synth}
+(\emph{longest topological path}).
+
+\section{Pamięci}
+
+\begin{sv}
+logic [31:0] mem [0:255];                       // 256 słów po 32 bity
+always_ff @(posedge clk)
+  if (we) mem[waddr] <= wdata;                  // zapis synchroniczny
+assign rdata = mem[raddr];                      // odczyt asynchroniczny
+// albo:
+always_ff @(posedge clk) rdata <= mem[raddr];   // odczyt synchroniczny
+\end{sv}
+
+\begin{description}
+  \item[Odczyt synchroniczny] (dana dostępna takt później): tak działają bloki
+    RAM w FPGA (BRAM) i pamięci SRAM. Są gęste i tanie.
+  \item[Odczyt asynchroniczny] wymaga zbudowania pamięci z przerzutników i
+    multiplekserów albo z „rozproszonej” pamięci LUT. Dla dużych pamięci jest
+    drogi.
+\end{description}
+
+Pamięć w testbenchu naszego procesora ma odczyt asynchroniczny, bo upraszcza
+to procesor jednocyklowy. Bank rejestrów (32×32 bity) jest mały i też ma
+odczyt asynchroniczny. W rozdziale 3 zobaczysz, ile to kosztuje.
+
+\section{Automaty skończone (FSM)}
+
+Automat to rejestr stanu i dwie funkcje kombinacyjne:
+\emph{następny stan} = $f$(stan, wejścia) oraz \emph{wyjścia} = $g$(stan)
+w automacie \textbf{Moore'a} albo $g$(stan, wejścia) w automacie
+\textbf{Mealy'ego}. Wyjścia Moore'a zmieniają się tylko po zboczu zegara (są
+„czyste”, ale opóźnione o takt). Mealy reaguje w tym samym takcie, ale jego
+wyjście zależy kombinacyjnie od wejść (dłuższe ścieżki, ryzyko pętli
+kombinacyjnych między modułami).
+
+\subsection*{Przykład: detektor sekwencji 110 (Moore, z nakładaniem)}
+
+\begin{figure}[h]
+\centering
+\begin{tikzpicture}[->, >=Stealth, node distance=27mm, thick, every state/.style={fill=akcentjasny, minimum size=13mm, font=\sffamily\scriptsize, align=center}]
+  \node[state, initial, initial text=rst] (s0) {S0\\$\varnothing$};
+  \node[state, right of=s0] (s1) {S1\\„1”};
+  \node[state, right of=s1] (s11) {S11\\„11”};
+  \node[state, right of=s11, fill=zadaniejasny, double] (s110) {S110\\found=1};
+  \path (s0) edge[loop above] node[sygnal]{0} ()
+             edge node[above, sygnal]{1} (s1)
+        (s1) edge node[above, sygnal]{1} (s11)
+             edge[bend left=35] node[below, sygnal]{0} (s0)
+        (s11) edge[loop above] node[sygnal]{1} ()
+              edge node[above, sygnal]{0} (s110)
+        (s110) edge[bend right=45] node[above, sygnal]{1} (s1)
+               edge[bend left=55] node[below, sygnal]{0} (s0);
+\end{tikzpicture}
+\caption{Automat Moore'a wykrywający 110. Wyjście \code{found} zależy tylko od stanu.}
+\label{fig:fsm110}
+\end{figure}
+
+Każda strzałka na diagramie to jedna gałąź w \code{case}. Styl obowiązujący w
+kursie, czyli \textbf{dwa procesy}:
+
+\begin{sv}
+typedef enum logic [1:0] {S0, S1, S11, S110} state_t;
+state_t state, next;
+
+always_ff @(posedge clk)              // 1) tylko rejestr stanu
+  if (rst) state <= S0;
+  else     state <= next;
+
+always_comb begin                     // 2) tylko logika następnego stanu
+  next = state;                       //    wartość domyślna (brak zatrzasku!)
+  case (state)
+    S0:   if (in) next = S1;   else next = S0;
+    S1:   if (in) next = S11;  else next = S0;
+    S11:  if (in) next = S11;  else next = S110;
+    S110: if (in) next = S1;   else next = S0;
+    default: next = S0;
+  endcase
+end
+
+assign found = (state == S110);       // wyjście Moore'a
+\end{sv}
+
+\begin{pulapka}[Icarus i \texttt{enum}]
+\code{next = in ? S1 : S0;} daje w Icarusie błąd \emph{This assignment requires
+an explicit cast}. Pisz \code{if/else} (jak wyżej) albo
+\code{next = state\_t'(in ? S1 : S0);}.
+\end{pulapka}
+
+\subsection*{Automat z licznikiem: sterowanie i ścieżka danych}
+
+Większość prawdziwych układów (UART, kontroler pamięci, procesor wielocyklowy)
+to mały automat sterujący i „ścieżka danych”: liczniki i rejestry przesuwne.
+Automat mówi „licz”, „przesuń”, „załaduj”, a ścieżka danych odpowiada
+„doliczyłem do końca”. Nadajnik UART z zadania 2.5 jest dokładnie taki.
+
+\begin{figure}[h]
+\centering
+\begin{tikzpicture}[x=5.2mm, y=6mm]
+  \node[sygnal, anchor=east] at (-0.4,0.25) {tx};
+  \draw[thick] (-1,0.5) -- (0,0.5) -- (0,0) -- (2,0);
+  \foreach \i/\b in {0/1,1/0,2/1,3/1,4/0,5/0,6/1,7/0} {
+    \draw[thick] ({2+2*\i},0) -- ({2+2*\i},0.5) -- ({4+2*\i},0.5) -- ({4+2*\i},0) -- cycle;
+    \node[sygnal] at ({3+2*\i},0.25) {d\i};
+  }
+  \draw[thick] (18,0.5) -- (22,0.5);
+  \node[etykieta] at (1,-0.5) {start=0};
+  \node[etykieta] at (19,-0.5) {stop=1};
+  \draw[decorate, decoration={brace, amplitude=4pt}] (2,0.8) -- node[above=4pt, etykieta]{8 bitów danych, najmłodszy pierwszy} (18,0.8);
+  \draw[decorate, decoration={brace, amplitude=3pt, mirror}] (0,-1) -- node[below=3pt, etykieta]{CLKS\_PER\_BIT taktów} (2,-1);
+\end{tikzpicture}
+\caption{Ramka UART 8N1. Linia w spoczynku ma stan 1.}
+\label{fig:uart}
+\end{figure}
+
+\section{Porównania z parametrami}
+
+\code{parameter int DEPTH = 8} ma 32 bity. Porównanie \code{count == DEPTH},
+gdzie \code{count} ma 4 bity, jest poprawne, ale Verilator zgłosi
+\code{WIDTHEXPAND}. Czysty idiom to stała o właściwej szerokości:
+
+\begin{sv}
+localparam int AW = $clog2(DEPTH);
+localparam logic [AW:0] FULL = (AW+1)'(DEPTH);   // rzutowanie na AW+1 bitów
+assign full = (count == FULL);
+\end{sv}
+
+\section{Kolejka FIFO: wskaźniki z dodatkowym bitem}
+
+FIFO o głębokości $D = 2^k$ to pamięć i dwa wskaźniki: zapisu i odczytu.
+Gdyby wskaźniki miały $k$ bitów, stan „pełna” i „pusta” wyglądałyby tak samo
+(wskaźniki równe). Sztuczka: wskaźniki mają $k+1$ bitów, a pamięć adresuje się
+młodszymi $k$ bitami. Wtedy:
+
+\begin{itemize}
+  \item \code{count = wr\_ptr - rd\_ptr}: odejmowanie modulo $2^{k+1}$ zawija się samo,
+  \item \code{empty}: wskaźniki równe,
+  \item \code{full}: różnią się tylko najstarszym bitem (czyli \code{count == D}).
+\end{itemize}
+
+\section{Sygnały z zewnątrz (na przyszłość)}
+
+Przycisk albo linia RX z UART zmieniają się niezależnie od Twojego zegara.
+Przerzutnik próbkujący taki sygnał może wpaść w \textbf{metastabilność}.
+Standardowe lekarstwo to dwa przerzutniki pod rząd (synchronizator) przed
+jakąkolwiek logiką. W symulacji tego nie zobaczysz, a na płytce objawia się
+„losowymi” błędami raz na godzinę.
+
+\section{Zadania}
+
+\begin{zadanie}{2.1 --- Detektor zbocza (\code{rtl/edge\_detect.sv})}
+Jeden przerzutnik i jedna bramka. W przebiegach (\code{make wave T=edge\_detect})
+zobacz, że \code{rise} jest kombinacyjny: pojawia się razem ze zmianą
+\code{in}, a znika na zboczu zegara.
+\end{zadanie}
+
+\begin{zadanie}{2.2 --- LFSR (\code{rtl/lfsr16.sv})}
+Wielomian $x^{16}+x^{14}+x^{13}+x^{11}+1$, ziarno \code{16'hACE1}. Test
+sprawdza też okres (65535). Dlaczego okres to $2^{16}-1$, a nie $2^{16}$? Jakiego
+stanu LFSR nigdy nie osiągnie i co by się stało, gdyby w nim wystartował?
+\end{zadanie}
+
+\begin{zadanie}{2.3 --- Detektor 1011 (\code{rtl/seq\_detect.sv})}
+Automat Moore'a, 5 stanów, styl dwuprocesowy. \textbf{Najpierw narysuj
+diagram} jak na rys.~\ref{fig:fsm110}. Najtrudniejsze są przejścia przy
+nakładaniu: dokąd przejść ze stanu „1011”, gdy przyjdzie 0, a dokąd, gdy 1?
+\end{zadanie}
+
+\begin{zadanie}{2.4 --- FIFO (\code{rtl/fifo.sv})}
+Test porównuje FIFO z kolejką \code{q[\$]} z SystemVeriloga przez 3000 losowych
+taktów, także przy jednoczesnym \code{push} i \code{pop}.
+\end{zadanie}
+
+\begin{zadanie}{2.5 --- Nadajnik UART (\code{rtl/uart\_tx.sv})}
+Ramka z rys.~\ref{fig:uart}. Test to „odbiornik programowy” w testbenchu (warto
+przeczytać: \code{fork/join}, taski czekające na zbocza). Po zrobieniu:
+\code{make synth T=uart\_tx}. Czy umiesz przypisać każdy przerzutnik do
+konkretnego rejestru w swoim kodzie? Ten moduł przyda się na FPGA (rozdział 9).
+\end{zadanie}
+
+\begin{gotowe}
+\code{make test} → 5 × PASS, \code{make lint} czysto.
+\end{gotowe}
+
+\begin{kontrolne}
+  \item Co dokładnie zrobi symulator z \code{a <= b; b <= a;} na zboczu zegara? A z \code{a = b; b = a;}?
+  \item Od czego zależy maksymalna częstotliwość zegara układu? Co to jest ścieżka krytyczna?
+  \item Czym różni się odczyt synchroniczny od asynchronicznego i który z nich mają bloki RAM w FPGA?
+  \item Narysuj automat Mealy'ego wykrywający 110. Ile ma stanów? Kiedy zmienia się jego wyjście?
+  \item Dlaczego wskaźniki FIFO mają o jeden bit więcej, niż potrzeba do adresowania?
+\end{kontrolne}

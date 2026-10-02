@@ -1,0 +1,294 @@
+\chapter{Architektura RV32I i emulator w C}
+\label{ch:isa}
+
+\metryczka{znać RV32I na poziomie bitów i napisać \emph{model referencyjny}
+procesora w C: emulator, z którym w rozdziałach 6--8 porównasz swój sprzęt
+instrukcja po instrukcji.}{2--3 wieczory}{04-isa-emulator/}
+
+\section{Formaty instrukcji}
+
+Każda instrukcja ma 32 bity. \textbf{Pola rejestrów są zawsze w tych samych
+miejscach}, więc dekoder może czytać rejestry, zanim jeszcze rozpozna
+instrukcję.
+
+% \pole{y}{starszy bit}{młodszy bit}{etykieta}{kolor}
+\newcommand{\pole}[5]{%
+  \draw[thick, fill=#5] ({(31-#2)*0.42},#1) rectangle ({(32-#3)*0.42},{#1+0.62});
+  \node[font=\sffamily\scriptsize] at ({(31-#2+32-#3)*0.21},{#1+0.31}) {#4};}
+
+\begin{figure}[h]
+\centering
+\begin{tikzpicture}
+  \foreach \b in {31,25,24,20,19,15,14,12,11,7,6,0} {
+    \node[font=\ttfamily\tiny, text=szary] at ({(31-\b+0.5)*0.42},0.85) {\b};
+  }
+  % R
+  \pole{0}{31}{25}{funct7}{akcentjasny} \pole{0}{24}{20}{rs2}{zadaniejasny}
+  \pole{0}{19}{15}{rs1}{zadaniejasny} \pole{0}{14}{12}{f3}{akcentjasny}
+  \pole{0}{11}{7}{rd}{zadaniejasny} \pole{0}{6}{0}{opcode}{akcentjasny}
+  \node[anchor=west, font=\sffamily\small\bfseries] at (13.7,0.31) {R};
+  % I
+  \pole{-0.9}{31}{20}{imm[11:0]}{pulapkajasny} \pole{-0.9}{19}{15}{rs1}{zadaniejasny}
+  \pole{-0.9}{14}{12}{f3}{akcentjasny} \pole{-0.9}{11}{7}{rd}{zadaniejasny}
+  \pole{-0.9}{6}{0}{opcode}{akcentjasny}
+  \node[anchor=west, font=\sffamily\small\bfseries] at (13.7,-0.59) {I};
+  % S
+  \pole{-1.8}{31}{25}{imm[11:5]}{pulapkajasny} \pole{-1.8}{24}{20}{rs2}{zadaniejasny}
+  \pole{-1.8}{19}{15}{rs1}{zadaniejasny} \pole{-1.8}{14}{12}{f3}{akcentjasny}
+  \pole{-1.8}{11}{7}{imm[4:0]}{pulapkajasny} \pole{-1.8}{6}{0}{opcode}{akcentjasny}
+  \node[anchor=west, font=\sffamily\small\bfseries] at (13.7,-1.49) {S};
+  % B
+  \pole{-2.7}{31}{31}{\tiny 12}{pulapkajasny} \pole{-2.7}{30}{25}{imm[10:5]}{pulapkajasny}
+  \pole{-2.7}{24}{20}{rs2}{zadaniejasny} \pole{-2.7}{19}{15}{rs1}{zadaniejasny}
+  \pole{-2.7}{14}{12}{f3}{akcentjasny} \pole{-2.7}{11}{8}{imm[4:1]}{pulapkajasny}
+  \pole{-2.7}{7}{7}{\tiny 11}{pulapkajasny} \pole{-2.7}{6}{0}{opcode}{akcentjasny}
+  \node[anchor=west, font=\sffamily\small\bfseries] at (13.7,-2.39) {B};
+  % U
+  \pole{-3.6}{31}{12}{imm[31:12]}{pulapkajasny} \pole{-3.6}{11}{7}{rd}{zadaniejasny}
+  \pole{-3.6}{6}{0}{opcode}{akcentjasny}
+  \node[anchor=west, font=\sffamily\small\bfseries] at (13.7,-3.29) {U};
+  % J
+  \pole{-4.5}{31}{31}{\tiny 20}{pulapkajasny} \pole{-4.5}{30}{21}{imm[10:1]}{pulapkajasny}
+  \pole{-4.5}{20}{20}{\tiny 11}{pulapkajasny} \pole{-4.5}{19}{12}{imm[19:12]}{pulapkajasny}
+  \pole{-4.5}{11}{7}{rd}{zadaniejasny} \pole{-4.5}{6}{0}{opcode}{akcentjasny}
+  \node[anchor=west, font=\sffamily\small\bfseries] at (13.7,-4.19) {J};
+\end{tikzpicture}
+\caption{Sześć formatów instrukcji RV32I (f3 = funct3). Na czerwono fragmenty stałej natychmiastowej.}
+\label{fig:formaty}
+\end{figure}
+
+\section{Stałe natychmiastowe (immediate)}
+
+\begin{center}
+\small
+\begin{tabular}{@{}ll@{}}
+\toprule
+Format & Immediate jako 32-bitowa liczba (\code{i} = instrukcja) \\
+\midrule
+I & \code{\{\{20\{i[31]\}\}, i[31:20]\}} \\
+S & \code{\{\{20\{i[31]\}\}, i[31:25], i[11:7]\}} \\
+B & \code{\{\{19\{i[31]\}\}, i[31], i[7], i[30:25], i[11:8], 1'b0\}} \\
+U & \code{\{i[31:12], 12'b0\}} \\
+J & \code{\{\{11\{i[31]\}\}, i[31], i[19:12], i[20], i[30:21], 1'b0\}} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\paragraph{Dlaczego bity są tak „pomieszane”?} Zasada projektowa RISC-V: każdy
+bit wyniku ma pochodzić z jak najmniejszej liczby pozycji w instrukcji.
+\begin{itemize}
+  \item Bit znaku to \emph{zawsze} \code{instr[31]}, więc rozszerzanie znakiem
+    zaczyna się, zanim dekoder rozpozna format.
+  \item Bity \code{imm[10:5]} są zawsze w \code{instr[30:25]}, a \code{imm[4:1]}
+    w jednym z dwóch miejsc.
+  \item W sprzęcie każdy bit immediate'a to mały multiplekser o 2--3 wejściach
+    zamiast dużego.
+\end{itemize}
+W formatach B i J nie ma bitu 0, bo skoki są zawsze o parzystą liczbę bajtów
+(rozszerzenie C ma instrukcje 16-bitowe). Dzięki temu zasięg jest dwa razy
+większy: $\pm$4 KiB dla B i $\pm$1 MiB dla J.
+
+\section{Lista instrukcji RV32I}
+
+\begin{center}
+\small
+\begin{tabularx}{\linewidth}{@{}l c l X@{}}
+\toprule
+\textbf{opcode} & \textbf{Format} & \textbf{Instrukcje} & \textbf{Semantyka} \\
+\midrule
+\code{0110111} LUI & U & lui rd, imm & rd = imm $\ll$ 12 \\
+\code{0010111} AUIPC & U & auipc rd, imm & rd = pc + (imm $\ll$ 12) \\
+\code{1101111} JAL & J & jal rd, off & rd = pc+4; pc += off \\
+\code{1100111} JALR & I & jalr rd, off(rs1) & t = (rs1+off) \& \textasciitilde1; rd = pc+4; pc = t \\
+\code{1100011} BRANCH & B & beq bne blt bge bltu bgeu & jeśli warunek(rs1, rs2): pc += off \\
+\code{0000011} LOAD & I & lb lh lw lbu lhu & rd = rozszerz(mem[rs1+off]) \\
+\code{0100011} STORE & S & sb sh sw & mem[rs1+off] = rs2 (8/16/32 b) \\
+\code{0010011} OP-IMM & I & addi slti sltiu xori ori andi slli srli srai & rd = rs1 op imm \\
+\code{0110011} OP & R & add sub sll slt sltu xor srl sra or and & rd = rs1 op rs2 \\
+\code{0001111} FENCE & I & fence & u nas: nop \\
+\code{1110011} SYSTEM & I & ecall, ebreak, csr* & u nas: nop \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\code{funct3} wybiera wariant: rodzaj operacji ALU, szerokość load/store albo
+warunek skoku. \code{funct7 = 0100000} (czyli \code{instr[30] = 1}) odróżnia
+\code{sub} od \code{add} oraz \code{sra/srai} od \code{srl/srli}. Przy
+\code{slli/srli/srai} pole \code{rs2} zawiera \code{shamt}.
+
+\begin{pulapka}[\texttt{jalr} z \texttt{rd == rs1}]
+W \code{jalr a0, 0(a0)} cel liczysz ze \emph{starej} wartości \code{a0}, a
+dopiero potem zapisujesz do niej adres powrotu. W C łatwo napisać to w złej
+kolejności. Test \code{06\_jal\_jalr} to sprawdza.
+\end{pulapka}
+
+\section{Pseudoinstrukcje i ładowanie stałych}
+
+\begin{center}
+\small
+\begin{tabular}{@{}ll@{\hspace{2em}}ll@{}}
+\toprule
+\textbf{Pseudo} & \textbf{Rozwinięcie} & \textbf{Pseudo} & \textbf{Rozwinięcie} \\
+\midrule
+\code{nop} & \code{addi x0, x0, 0} & \code{j L} & \code{jal x0, L} \\
+\code{mv rd, rs} & \code{addi rd, rs, 0} & \code{call L} & \code{jal ra, L} \\
+\code{not rd, rs} & \code{xori rd, rs, -1} & \code{ret} & \code{jalr x0, 0(ra)} \\
+\code{neg rd, rs} & \code{sub rd, x0, rs} & \code{beqz rs, L} & \code{beq rs, x0, L} \\
+\code{seqz rd, rs} & \code{sltiu rd, rs, 1} & \code{bgt a, b, L} & \code{blt b, a, L} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\code{li rd, imm32} rozwija się w \code{lui rd, hi} + \code{addi rd, rd, lo}.
+\textbf{Pułapka:} \code{addi} rozszerza 12-bitową stałą \emph{znakiem}, więc dla
+\code{0x12345FFF} nie wystarczy \code{lui 0x12345; addi 0xFFF}, bo
+\code{0xFFF} to $-1$. Poprawnie: $hi = (v + \code{0x800}) \gg 12$, czyli
+\code{lui 0x12346; addi -1}.
+
+\section{Pamięć}
+
+Adresowanie jest bajtowe, \textbf{little-endian}: słowo \code{0x11223344} pod
+adresem 0 to bajty \code{44 33 22 11} pod adresami 0, 1, 2, 3.
+\code{lb}/\code{lh} rozszerzają znakiem, a \code{lbu}/\code{lhu} zerami.
+Zakładamy dostępy \emph{wyrównane}.
+
+\begin{figure}[h]
+\centering
+\begin{tikzpicture}[x=13mm]
+  \foreach \i/\b in {0/44,1/33,2/22,3/11} {
+    \draw[thick, fill=akcentjasny] (\i,0) rectangle ++(1,0.7);
+    \node[font=\ttfamily\small] at (\i+0.5,0.35) {\b};
+    \node[sygnal, text=szary] at (\i+0.5,-0.25) {adr \i};
+  }
+  \draw[thick, fill=zadaniejasny] (6,0) rectangle ++(4,0.7);
+  \foreach \i/\b in {0/11,1/22,2/33,3/44} { \node[font=\ttfamily\small] at (6.5+\i,0.35) {\b}; }
+  \node[sygnal, text=szary] at (6.5,-0.25) {[31:24]};
+  \node[sygnal, text=szary] at (9.5,-0.25) {[7:0]};
+  \draw[->, thick] (4.2,0.35) -- node[above, etykieta]{lw} (5.8,0.35);
+\end{tikzpicture}
+\caption{Little-endian: najmłodszy bajt słowa pod najniższym adresem.}
+\end{figure}
+
+\section{Nasza maszyna}
+
+To samo „środowisko” symulują emulator (\plik{emu/rv32sim.c}) i testbench RTL
+(\plik{common/tb/soc\_tb.sv}):
+
+\begin{center}
+\small
+\begin{tabularx}{\linewidth}{@{}l X l@{}}
+\toprule
+\textbf{Adres} & \textbf{Co} & \textbf{Dostęp} \\
+\midrule
+\code{0x0000\_0000}--\code{0x0000\_FFFF} & RAM 64 KiB, tu ładowany jest program & R/W \\
+\code{0x1000\_0000} & TOHOST: zapis kończy symulację; 1 = PASS, $(n \ll 1)|1$ = FAIL w podteście $n$ & W \\
+\code{0x1000\_0004} & PUTCHAR: wypisuje znak \code{wdata[7:0]} & W \\
+\code{0x1000\_0008} & CYCLES: licznik cykli (w emulatorze: liczba instrukcji) & R \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+Po resecie \code{pc = 0} i wszystkie rejestry mają wartość 0. Testy
+(\plik{common/sw/tests/*.S}) trzymają w rejestrze \code{gp} numer podtestu i
+kończą skokiem do \code{pass} albo \code{fail} (\plik{test\_end.S}):
+
+\begin{asm}
+    li   gp, 3              # podtest 3: slti / sltiu
+    slti a1, a0, 6
+    li   t2, 1
+    bne  a1, t2, fail       # przy błędzie: TOHOST = (3 << 1) | 1
+    ...
+    j    pass
+.include "test_end.S"
+\end{asm}
+
+\section{Asembler i disasembler kursu}
+
+\begin{sh}
+T=../common/tools/rvtool.py
+python3 $T asm ../common/sw/tests/08_fib.S -I ../common/sw/tests -o fib.hex -l fib.lst
+python3 $T dis fib.hex              # disasemblacja całego obrazu
+python3 $T dis 0x00a50533           # jedno słowo: add a0, a0, a0
+\end{sh}
+
+Format \code{.hex}: jedno 32-bitowe słowo na linię, od adresu 0 (to, co czyta
+\code{\$readmemh}). Listing pokazuje adres, słowo, źródło i disasemblację.
+
+\section{Ślad wykonania}
+
+Emulator z opcją \code{-t plik} zapisuje po każdej instrukcji jedną linię:
+\begin{txt}
+00000010 00a50533 x10=0000002a      pc, słowo instrukcji, zapisany rejestr = wartość
+00000014 fe051ce3 -                 instrukcja nie zapisała rejestru
+\end{txt}
+Procesor w RTL wypisuje dokładnie ten sam format. Porównanie obu śladów
+(\code{tracecmp.py}) wskazuje \emph{pierwszą} instrukcję, w której sprzęt
+odbiega od modelu. To najskuteczniejsza technika debugowania procesorów.
+
+\section{Emulator: struktura}
+
+Gotowe są pamięć z MMIO, ładowanie \code{.hex}, pętla główna i ślad. Ty piszesz
+funkcję \code{step()}:
+
+\begin{cc}
+// Wykonuje instrukcję spod c->pc. Zwraca numer zapisanego rejestru
+// (0, jeśli instrukcja nic nie zapisała), wartość przez *rd_val.
+static int step(cpu_t *c, uint32_t instr, uint32_t *rd_val) {
+    uint32_t op  = bits(instr, 6, 0);
+    uint32_t rd  = bits(instr, 11, 7);
+    ...
+    switch (op) {
+    case 0x37: res = instr & 0xFFFFF000u; break;    // LUI (gotowe)
+    // TODO: AUIPC, JAL, JALR, BRANCH, LOAD, STORE, OP-IMM, OP, FENCE, SYSTEM
+    }
+    if (writes && rd != 0) c->x[rd] = res;
+    c->pc = next;
+    ...
+}
+\end{cc}
+
+Wskazówki dla C: porównanie ze znakiem to \code{(int32\_t)a < (int32\_t)b},
+przesunięcie arytmetyczne to \code{(uint32\_t)((int32\_t)a >> n)} (formalnie
+\emph{implementation-defined}, w praktyce działa wszędzie), a przesunięcie o
+$\geq 32$ to w C UB, więc maskuj: \code{b \& 31}.
+
+\section{Zadania}
+
+\begin{zadanie}{4.1 --- Kodowanie na kartce}
+Zakoduj ręcznie do postaci szesnastkowej i sprawdź \code{rvtool dis}:
+(1) \code{addi a0, a0, -1}, (2) \code{sw ra, 12(sp)}, (3) \code{srai a1, a2, 3},
+(4) \code{lui t0, 0x10000}, (5) \code{beq a0, zero, +16}, (6) \code{jal ra, -2048}.
+Przy 5 i 6 rozpisz bity immediate'a na pozycje w instrukcji (rys.~\ref{fig:formaty}).
+\end{zadanie}
+
+\begin{zadanie}{4.2 --- Generator immediate'ów (\code{rtl/imm\_gen.sv})}
+\code{make unit}. Wektory (400 instrukcji wszystkich formatów) wygenerował
+asembler. Gdy test zgłosi błąd, zdekoduj instrukcję: \code{rvtool.py dis 0x...}.
+\end{zadanie}
+
+\begin{zadanie}{4.3 --- Emulator (\code{emu/rv32sim.c})}
+\code{make emu-test} uruchamia 12 programów, a \code{make emu-test P=07\_load\_store}
+jeden program ze śladem. Programy są ułożone od najprostszych (\code{01\_smoke}
+potrzebuje tylko \code{lui}, \code{addi}, \code{sw}, \code{jal}), więc
+implementuj instrukcje w kolejności testów. Pisz z myślą o porównywaniu z RTL:
+ten emulator jest specyfikacją, więc jasność jest ważniejsza niż wydajność.
+\end{zadanie}
+
+\begin{zadanie}{4.4 --- Czytanie programu}
+\code{make emu-test P=10\_recursion}, potem otwórz \plik{build/hex/10\_recursion.lst} i
+\plik{build/10\_recursion.trace}. Prześledź, jak \code{sp} maleje przy wywołaniach
+\code{fib}. Ile instrukcji wykonuje \code{mul(1234, 5678)} i dlaczego tyle? Ile
+razy wykonało się \code{jalr} i skąd ta liczba?
+\end{zadanie}
+
+\begin{gotowe}
+\code{make test} → PASS dla \code{imm\_gen} i 12 × PASS emulatora.
+\end{gotowe}
+
+\begin{kontrolne}
+  \item Który bit instrukcji jest zawsze bitem znaku immediate'a i dlaczego to ułatwia sprzęt?
+  \item Jaki jest zasięg \code{beq} i \code{jal}? Dlaczego bit 0 offsetu nie jest kodowany?
+  \item Rozwiń \code{li a0, 0xDEADBEEF} na \code{lui} i \code{addi}.
+  \item Co znajdzie się w rejestrze po \code{lb} z bajtu \code{0x80}, a co po \code{lbu}?
+  \item Dlaczego emulator jest dobrym „wzorcem” dla RTL, choć sam może mieć błędy?
+\end{kontrolne}

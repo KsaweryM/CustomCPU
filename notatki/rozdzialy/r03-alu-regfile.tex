@@ -1,0 +1,198 @@
+\chapter{ALU, bank rejestrów, komparator skoków}
+\label{ch:alu}
+
+\metryczka{zbudować trzy największe bloki ścieżki danych RV32I. Od tego rozdziału
+interfejsy modułów są kontraktem: procesory z rozdziałów 5 i 8 użyją
+dokładnie tych portów.}{1--2 wieczory}{03-alu-regfile/}
+
+\section{RV32I w pigułce}
+
+RISC-V RV32I to 32-bitowa architektura typu \emph{load/store}:
+\begin{itemize}
+  \item \textbf{32 rejestry} \code{x0}--\code{x31} po 32 bity, przy czym
+    \textbf{\code{x0} jest zawsze zerem}, a zapis do niego jest ignorowany.
+    Dzięki temu wiele pseudoinstrukcji nic nie kosztuje:
+    \code{mv a,b} = \code{addi a,b,0}, \code{nop} = \code{addi x0,x0,0},
+    \code{j L} = \code{jal x0,L}.
+  \item Arytmetyka działa tylko na rejestrach, a do pamięci dostęp jest
+    wyłącznie przez load i store.
+  \item \textbf{Brak flag}: nie ma rejestru statusu jak w x86 czy ARM. Skoki
+    warunkowe same porównują dwa rejestry (\code{blt a0, a1, L}), dlatego
+    zamiast flag z ALU budujemy osobny komparator.
+\end{itemize}
+
+\begin{center}
+\small
+\begin{tabular}{@{}lll@{}}
+\toprule
+\textbf{Rejestr} & \textbf{Nazwa ABI} & \textbf{Rola} \\
+\midrule
+x0 & zero & stałe zero \\
+x1 & ra & adres powrotu \\
+x2 & sp & wskaźnik stosu \\
+x3 & gp & global pointer (w testach kursu: numer podtestu) \\
+x5--7, x28--31 & t0--t6 & tymczasowe (\emph{caller-saved}) \\
+x8--9, x18--27 & s0--s11 & zachowywane (\emph{callee-saved}), s0 = fp \\
+x10--17 & a0--a7 & argumenty i wynik funkcji \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\section{ALU}
+
+Dziesięć operacji wystarcza na całą arytmetykę RV32I:
+
+\begin{center}
+\small
+\begin{tabularx}{\linewidth}{@{}l l X@{}}
+\toprule
+\textbf{Kod \code{op}} & \textbf{Operacja} & \textbf{Używana przez} \\
+\midrule
+\code{ALU\_ADD} 0\_000 & $a + b$ & add, addi, adresy load/store, auipc, lui ($0+imm$), jalr \\
+\code{ALU\_SUB} 1\_000 & $a - b$ & sub \\
+\code{ALU\_SLL} 0\_001 & $a \ll b[4{:}0]$ & sll, slli \\
+\code{ALU\_SLT} 0\_010 & $a <_s b$ ? 1 : 0 & slt, slti \\
+\code{ALU\_SLTU} 0\_011 & $a <_u b$ ? 1 : 0 & sltu, sltiu \\
+\code{ALU\_XOR} 0\_100 & $a \oplus b$ & xor, xori \\
+\code{ALU\_SRL} 0\_101 & $a \gg b[4{:}0]$ (zera) & srl, srli \\
+\code{ALU\_SRA} 1\_101 & $a \gg b[4{:}0]$ (znak) & sra, srai \\
+\code{ALU\_OR} 0\_110 & $a \lor b$ & or, ori \\
+\code{ALU\_AND} 0\_111 & $a \land b$ & and, andi \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+Kody są celowo równe \code{\{funct7[5], funct3\}} instrukcji R-type. Dekoder z
+rozdziału 5 dla \code{add/sub/sll/...} po prostu przepisze te bity z instrukcji.
+Stałe pochodzą z pakietu, który importujesz w nagłówku modułu:
+
+\begin{sv}
+module alu import rv32i_pkg::*; (
+  input  logic [31:0] a, b,
+  input  logic [3:0]  op,
+  output logic [31:0] y
+);
+  always_comb begin
+    case (op)
+      ALU_ADD: y = a + b;
+      // ...
+\end{sv}
+
+\begin{pulapka}[Trzy klasyczne błędy w ALU]
+(1) \code{a >>> n} bez \code{\$signed(a)} to zwykłe przesunięcie logiczne.
+(2) \code{a < b} na \code{logic} porównuje bez znaku, więc SLT wymaga
+\code{\$signed}. (3) Przesuwa się o \code{b[4:0]}, nie o całe \code{b}: ISA
+definiuje \code{sll x1,x2,x3} jako przesunięcie o \code{x3 \& 31}.
+\end{pulapka}
+
+\subsection*{Współdzielony sumator (dla chętnych)}
+
+Prosta wersja z \code{case} buduje osobny sumator dla ADD, osobny dla SUB i
+jeszcze jeden dla SLT/SLTU. Wszystkie da się obsłużyć \emph{jednym}:
+$a - b = a + \overline{b} + 1$, SLTU to brak przeniesienia z odejmowania, a SLT
+to znak różnicy poprawiony o przepełnienie:
+\[ \mathrm{SLT} = (a_{31} \ne b_{31}) \;?\; a_{31} \;:\; (a-b)_{31}. \]
+Porównaj \code{make synth T=alu} przed i po. Yosys część takiego
+współdzielenia robi sam, części nie.
+
+\section{Bank rejestrów}
+
+\begin{figure}[h]
+\centering
+\begin{tikzpicture}
+  \node[draw, thick, fill=zadaniejasny, minimum width=26mm, minimum height=40mm, align=center, font=\sffamily\small] (rf) {x1 \\ x2 \\ \vdots \\ x31};
+  \node[blok, minimum width=16mm, minimum height=12mm] (r1) at ($(rf.east)+(30mm,14mm)$) {mux\\32:1};
+  \node[blok, minimum width=16mm, minimum height=12mm] (r2) at ($(rf.east)+(30mm,-14mm)$) {mux\\32:1};
+  \draw[->, thick] ($(rf.east)+(0,10mm)$) -- ++(8mm,0) |- ($(r1.west)+(0,0)$);
+  \draw[->, thick] ($(rf.east)+(0,-10mm)$) -- ++(8mm,0) |- ($(r2.west)+(0,0)$);
+  \draw[->, thick] (r1.east) -- ++(10mm,0) node[right, sygnal]{rs1\_val};
+  \draw[->, thick] (r2.east) -- ++(10mm,0) node[right, sygnal]{rs2\_val};
+  \draw[<-, thick] (r1.north) -- ++(0,6mm) node[above, sygnal]{rs1};
+  \draw[<-, thick] (r2.south) -- ++(0,-6mm) node[below, sygnal]{rs2};
+  \node[blok, left=14mm of rf, minimum width=20mm] (dec) {dekoder\\zapisu};
+  \draw[->, thick] (dec) -- node[above, etykieta]{we[i]} (rf);
+  \draw[<-, thick] (dec.north) -- ++(0,6mm) node[above, sygnal]{we, rd};
+  \draw[<-, thick] (rf.south) -- ++(0,-8mm) node[below, sygnal]{rd\_val, clk};
+\end{tikzpicture}
+\caption{Bank rejestrów: 31 rejestrów (x0 jest stałą), dwa multipleksery
+odczytu 32:1 i dekoder zapisu.}
+\label{fig:rf}
+\end{figure}
+
+\begin{itemize}
+  \item \textbf{x0}: najprościej trzymać tablicę \code{regs[1:31]}, przy
+    odczycie dla \code{rs == 0} zwracać 0, a zapis z \code{rd == 0} ignorować.
+  \item \textbf{Odczyt w takcie zapisu} pod ten sam adres zwraca \emph{starą}
+    wartość. W procesorze jednocyklowym to poprawne: instrukcja czyta rejestry
+    na początku taktu, a wynik zapisuje na jego końcu. W potoku (rozdział 8)
+    „bypass” dodasz obok banku, nie wewnątrz.
+  \item \textbf{Zerowanie w \code{initial}}. Prawdziwy procesor ma po resecie
+    śmieci w rejestrach. U nas zerujemy je z powodu praktycznego: w rozdziale 6
+    porównujemy ślad procesora z emulatorem, który startuje od zer. Kompilatory
+    C zapisują na stos niezainicjowane rejestry \code{s*} w prologach funkcji,
+    więc RTL miałby tam \code{X}, emulator 0, i porównanie by się rozjechało.
+    Na FPGA \code{initial} jest syntezowalne, w ASIC nie.
+\end{itemize}
+
+\subsection*{Ile to kosztuje?}
+
+Synteza wzorcowego rozwiązania daje 992 przerzutniki (31×32) i ok. 1900
+multiplekserów 2:1. Każdy port odczytu to 32 drzewa po 31 multiplekserów.
+Bank rejestrów jest \emph{dwa razy większy niż cała ALU}! Dlatego prawdziwe
+procesory na FPGA często trzymają rejestry w BRAM-ie z odczytem
+synchronicznym, a odczyt rejestrów jest wtedy osobnym etapem potoku.
+
+\section{Komparator skoków}
+
+\begin{center}
+\small
+\begin{tabular}{@{}llll@{}}
+\toprule
+\code{funct3} & Instrukcja & Warunek skoku & Uwagi \\
+\midrule
+000 & beq & $a = b$ & \\
+001 & bne & $a \ne b$ & negacja beq \\
+100 & blt & $a <_s b$ & ze znakiem \\
+101 & bge & $a \geq_s b$ & negacja blt \\
+110 & bltu & $a <_u b$ & bez znaku \\
+111 & bgeu & $a \geq_u b$ & negacja bltu \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Struktura kodowania: \code{funct3[0]} neguje wynik, a \code{funct3[2:1]}
+wybiera rodzaj porównania. Da się to zapisać krócej niż przez sześć przypadków
+\code{case}.
+
+\section{Zadania}
+
+\begin{zadanie}{3.1 --- ALU (\code{rtl/alu.sv})}
+Test: 20\,000 kombinacji z naciskiem na przypadki brzegowe (0, 1, $-1$,
+\code{0x80000000}, \code{0x7FFFFFFF}, przesunięcie o 33).
+\end{zadanie}
+
+\begin{zadanie}{3.2 --- Bank rejestrów (\code{rtl/regfile.sv})}
+Test sprawdza zerowy stan początkowy, x0, brak zapisu przy \code{we = 0} i
+\emph{stary} odczyt w takcie zapisu.
+\end{zadanie}
+
+\begin{zadanie}{3.3 --- Komparator (\code{rtl/branch\_cmp.sv})}
+\end{zadanie}
+
+\begin{zadanie}{3.4 --- Synteza i koszt}
+\code{make synth T=alu}, \code{T=regfile}, \code{T=branch\_cmp}. Zapisz liczby
+komórek i długości ścieżek. Który blok jest największy i dlaczego? Która
+operacja ALU wyznacza najdłuższą ścieżkę? (Zakomentuj na chwilę ADD/SUB/SLT
+i zsyntezuj ponownie.)
+\end{zadanie}
+
+\begin{gotowe}
+\code{make test} → 3 × PASS, \code{make lint} czysto.
+\end{gotowe}
+
+\begin{kontrolne}
+  \item Dlaczego RISC-V nie ma flag i jakie to ma konsekwencje dla sprzętu?
+  \item Jaki wynik da \code{SLT} dla $a = \code{0x80000000}$, $b = 1$? A \code{SLTU}?
+  \item Dlaczego odczyt w takcie zapisu ma zwracać starą wartość w procesorze jednocyklowym?
+  \item Ile multiplekserów 2:1 potrzeba na jeden 32-bitowy port odczytu z 32 rejestrów?
+\end{kontrolne}

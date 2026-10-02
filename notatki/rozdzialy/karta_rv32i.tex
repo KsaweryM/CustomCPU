@@ -1,0 +1,52 @@
+% WYGENEROWANE z common/tools/rvtool.py — nie edytuj ręcznie
+\begin{center}
+\footnotesize
+\renewcommand{\arraystretch}{1.0}
+\begin{tabular}{@{}l c l l l l@{}}
+\toprule
+\textbf{Instr.} & \textbf{Fmt} & \textbf{opcode} & \textbf{funct3} & \textbf{funct7} & \textbf{Działanie} \\
+\midrule
+\code{lui} & U & \code{0110111} & \code{---} & \code{---} & rd = imm $\ll$ 12 \\
+\code{auipc} & U & \code{0010111} & \code{---} & \code{---} & rd = pc + (imm $\ll$ 12) \\
+\code{jal} & J & \code{1101111} & \code{---} & \code{---} & rd = pc+4; pc += imm \\
+\code{jalr} & I & \code{1100111} & \code{000} & \code{---} & rd = pc+4; pc = (rs1+imm) \& \textasciitilde 1 \\
+\midrule
+\code{beq} & B & \code{1100011} & \code{000} & \code{---} & rs1 == rs2 \\
+\code{bne} & B & \code{1100011} & \code{001} & \code{---} & rs1 != rs2 \\
+\code{blt} & B & \code{1100011} & \code{100} & \code{---} & rs1 $<_s$ rs2 \\
+\code{bge} & B & \code{1100011} & \code{101} & \code{---} & rs1 $\geq_s$ rs2 \\
+\code{bltu} & B & \code{1100011} & \code{110} & \code{---} & rs1 $<_u$ rs2 \\
+\code{bgeu} & B & \code{1100011} & \code{111} & \code{---} & rs1 $\geq_u$ rs2 \\
+\midrule
+\code{lb} & I & \code{0000011} & \code{000} & \code{---} & rd = sext(M[rs1+imm][7:0]) \\
+\code{lh} & I & \code{0000011} & \code{001} & \code{---} & rd = sext(M[rs1+imm][15:0]) \\
+\code{lw} & I & \code{0000011} & \code{010} & \code{---} & rd = M[rs1+imm] \\
+\code{lbu} & I & \code{0000011} & \code{100} & \code{---} & rd = zext(M[rs1+imm][7:0]) \\
+\code{lhu} & I & \code{0000011} & \code{101} & \code{---} & rd = zext(M[rs1+imm][15:0]) \\
+\code{sb} & S & \code{0100011} & \code{000} & \code{---} & M[rs1+imm][7:0] = rs2[7:0] \\
+\code{sh} & S & \code{0100011} & \code{001} & \code{---} & M[rs1+imm][15:0] = rs2[15:0] \\
+\code{sw} & S & \code{0100011} & \code{010} & \code{---} & M[rs1+imm] = rs2 \\
+\midrule
+\code{addi} & I & \code{0010011} & \code{000} & \code{---} & rd = rs1 + imm \\
+\code{slti} & I & \code{0010011} & \code{010} & \code{---} & rd = rs1 $<_s$ imm \\
+\code{sltiu} & I & \code{0010011} & \code{011} & \code{---} & rd = rs1 $<_u$ imm \\
+\code{xori} & I & \code{0010011} & \code{100} & \code{---} & rd = rs1 \^{} imm \\
+\code{ori} & I & \code{0010011} & \code{110} & \code{---} & rd = rs1 | imm \\
+\code{andi} & I & \code{0010011} & \code{111} & \code{---} & rd = rs1 \& imm \\
+\code{slli} & I* & \code{0010011} & \code{001} & \code{0000000} & rd = rs1 $\ll$ shamt \\
+\code{srli} & I* & \code{0010011} & \code{101} & \code{0000000} & rd = rs1 $\gg_u$ shamt \\
+\code{srai} & I* & \code{0010011} & \code{101} & \code{0100000} & rd = rs1 $\gg_s$ shamt \\
+\midrule
+\code{add} & R & \code{0110011} & \code{000} & \code{0000000} & rd = rs1 + rs2 \\
+\code{sub} & R & \code{0110011} & \code{000} & \code{0100000} & rd = rs1 - rs2 \\
+\code{sll} & R & \code{0110011} & \code{001} & \code{0000000} & rd = rs1 $\ll$ rs2[4:0] \\
+\code{slt} & R & \code{0110011} & \code{010} & \code{0000000} & rd = rs1 $<_s$ rs2 \\
+\code{sltu} & R & \code{0110011} & \code{011} & \code{0000000} & rd = rs1 $<_u$ rs2 \\
+\code{xor} & R & \code{0110011} & \code{100} & \code{0000000} & rd = rs1 \^{} rs2 \\
+\code{srl} & R & \code{0110011} & \code{101} & \code{0000000} & rd = rs1 $\gg_u$ rs2[4:0] \\
+\code{sra} & R & \code{0110011} & \code{101} & \code{0100000} & rd = rs1 $\gg_s$ rs2[4:0] \\
+\code{or} & R & \code{0110011} & \code{110} & \code{0000000} & rd = rs1 | rs2 \\
+\code{and} & R & \code{0110011} & \code{111} & \code{0000000} & rd = rs1 \& rs2 \\
+\bottomrule
+\end{tabular}
+\end{center}

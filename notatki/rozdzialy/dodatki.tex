@@ -1,0 +1,169 @@
+\chapter{Karta RV32I}
+\label{app:karta}
+
+Kodowanie wszystkich 37 instrukcji obliczeniowych, pamięciowych i sterujących RV32I
+(bez \code{fence}, \code{ecall}, \code{ebreak}). Tabela jest wygenerowana z tablic
+asemblera kursu (\plik{common/tools/rvtool.py}), który koduje instrukcje bit w bit
+tak samo jak LLVM. Formaty i immediate'y: rys.~\ref{fig:formaty}.
+
+\input{rozdzialy/karta_rv32i}
+
+{\small I* --- format I, w którym \code{imm[11:5]} pełni rolę \code{funct7}, a
+\code{imm[4:0]} to \code{shamt}. Wszystkie immediate'y poza U są rozszerzane
+znakiem. \code{sext}/\code{zext}: rozszerzenie znakiem/zerami.}
+
+\section*{Mapa pamięci maszyny kursu}
+
+\begin{center}
+\small
+\begin{tabular}{@{}lll@{}}
+\toprule
+\code{0x0000\_0000}--\code{0x0000\_FFFF} & RAM 64 KiB & program, dane, stos \\
+\code{0x1000\_0000} & TOHOST (W) & 1 = PASS, $(n \ll 1)|1$ = FAIL $n$ \\
+\code{0x1000\_0004} & PUTCHAR (W) & znak \code{wdata[7:0]} \\
+\code{0x1000\_0008} & CYCLES (R) & licznik cykli \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\chapter{Ściąga SystemVerilog}
+\label{app:sv}
+
+\section*{Składnia}
+\begin{sv}
+module nazwa import rv32i_pkg::*; #(parameter int W = 8) (
+  input  logic         clk, rst,
+  input  logic [W-1:0] a,
+  output logic [W-1:0] y
+);
+  logic [W-1:0] t;                      // sygnał wewnętrzny
+  localparam logic [3:0] STALA = 4'hA;  // stała lokalna
+
+  assign t = a ^ {W{1'b1}};             // logika kombinacyjna (krótka)
+
+  always_comb begin                     // logika kombinacyjna (dłuższa)
+    y = '0;                             // wartość domyślna: brak zatrzasku
+    case (t[1:0])
+      2'd0:    y = a;
+      default: y = t;
+    endcase
+  end
+
+  always_ff @(posedge clk)              // rejestr
+    if (rst) q <= '0;
+    else     q <= y;
+endmodule
+\end{sv}
+
+\section*{Literały i operatory}
+\begin{center}
+\small
+\begin{tabularx}{\linewidth}{@{}l X@{}}
+\toprule
+\code{8'hFF}, \code{4'b1010}, \code{32'd7}, \code{'0}, \code{'1} & literały z rozmiarem; same zera/jedynki \\
+\code{x[7:0]}, \code{x[8*i +: 8]} & wycinek stały; wycinek o zmiennym początku \\
+\code{\{a, b\}}, \code{\{4\{b\}\}} & sklejanie; powielanie \\
+\code{\& | \^{} \~{}} & bitowe; jako unarne: redukcja (\code{|x} = „jakikolwiek bit”) \\
+\code{\&\& || !} & logiczne (1 bit) \\
+\code{== !=}, \code{=== !==} & równość; dosłowna (z X i Z), tylko w testbenchach \\
+\code{<< >> >>>} & przesunięcia; \code{>>>} arytmetyczne tylko dla signed \\
+\code{\$signed(x)}, \code{\$unsigned(x)} & interpretacja ze znakiem / bez znaku \\
+\code{W'(x)} & rzutowanie na szerokość \code{W} \\
+\code{\$clog2(N)} & $\lceil \log_2 N \rceil$ (szerokość adresu dla $N$ elementów) \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\section*{Zasady kursu}
+\begin{enumerate}
+  \item \code{always\_comb} + \code{=}, \code{always\_ff} + \code{<=}. Nigdy odwrotnie.
+  \item W \code{always\_comb} każdy sygnał ma wartość domyślną na początku bloku.
+  \item Każdy \code{case} ma \code{default}.
+  \item Jeden zegar, reset synchroniczny aktywny w stanie 1.
+  \item Stałe z pakietu, nie „magiczne liczby”.
+  \item Uważaj na szerokości: \code{make lint} musi być czysty.
+\end{enumerate}
+
+\section*{Testbench}
+\begin{sv}
+`timescale 1ns/1ps
+module tb_x;
+  `include "tb_common.svh"
+  logic clk = 0;
+  always #5 clk = ~clk;
+  initial begin
+    tb_start();
+    @(negedge clk);                       // zmieniaj wejścia na zboczu opadającym
+    `CHECK_EQ(y, 8'h42, "opis")
+    repeat (10) @(negedge clk);
+    $display("a=%h b=%0d", a, b);
+    tb_finish();
+  end
+endmodule
+\end{sv}
+
+\chapter{Ściąga poleceń}
+\label{app:make}
+
+\begin{center}
+\small
+\begin{tabularx}{\linewidth}{@{}l X@{}}
+\toprule
+\textbf{Polecenie} & \textbf{Działanie} \\
+\midrule
+\code{make test} & wszystkie testy modułu \\
+\code{make unit [T=nazwa]} & testy jednostkowe (\plik{tb/tb\_nazwa.sv}) \\
+\code{make wave T=nazwa} & test + przebiegi w GTKWave \\
+\code{make lint} & Verilator \code{--lint-only -Wall} \\
+\code{make synth T=moduł} & Yosys: komórki i najdłuższa ścieżka \\
+\code{make progs [PAD=n] [SIM=verilator]} & 12 programów testowych na rdzeniu \\
+\code{make prog P=08\_fib} & jeden program: wyjście, ślad \plik{build/P.trace}, listing \\
+\code{make wave P=08\_fib} & przebiegi wykonania programu \\
+\code{make cosim} & porównanie śladu z emulatorem \\
+\code{make fuzz N=100 [LEN=300 SEED=1]} & losowe programy + porównanie \\
+\code{make emu-test [P=...]} & (moduł 04) programy na emulatorze \\
+\code{make run P=hello [CORE=08]} & (moduł 07) program w C na rdzeniu \\
+\code{make clean} & usuwa \plik{build/} \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\section*{Narzędzia w \plik{common/tools}}
+\begin{sh}
+python3 rvtool.py asm prog.S -o prog.hex -l prog.lst [-I katalog] [--pad-nops N]
+python3 rvtool.py dis prog.hex          # albo: dis 0x00a50533
+python3 rvtool.py bin2hex prog.bin -o prog.hex
+python3 tracecmp.py ref.trace dut.trace
+python3 rvgen.py --seed 7 -n 300 -o rand.S [--mext]
+\end{sh}
+
+\chapter{Słowniczek}
+\label{app:slownik}
+
+\begin{center}
+\small
+\begin{tabularx}{\linewidth}{@{}l l X@{}}
+\toprule
+\textbf{Polski} & \textbf{Angielski} & \textbf{Znaczenie} \\
+\midrule
+przerzutnik & flip-flop (FF) & element pamiętający bit na zboczu zegara \\
+zatrzask & latch & element pamiętający sterowany poziomem; w RTL zwykle błąd \\
+ścieżka krytyczna & critical path & najdłuższa droga kombinacyjna między rejestrami \\
+bank rejestrów & register file & 32 rejestry z portami odczytu i zapisu \\
+ścieżka danych & datapath & bloki przetwarzające dane (ALU, rejestry, multipleksery) \\
+jednostka sterująca & control unit & dekoder wytwarzający sygnały sterujące \\
+potok & pipeline & podział wykonania na etapy oddzielone rejestrami \\
+hazard & hazard & sytuacja, w której potok dałby zły wynik bez dodatkowej logiki \\
+przekazywanie & forwarding / bypass & dostarczenie wyniku prosto z rejestru potoku \\
+wstrzymanie & stall & zatrzymanie części potoku na takt \\
+bańka & bubble & pusty etap potoku (\code{valid = 0}) \\
+unieważnienie & flush & zamiana instrukcji z błędnej ścieżki w bańki \\
+zatwierdzenie & commit / retire & zakończenie instrukcji, widoczne w śladzie \\
+stała natychmiastowa & immediate & stała zakodowana w instrukcji \\
+rozszerzenie znakiem & sign extension & kopiowanie bitu znaku na starsze bity \\
+co-symulacja & co-simulation & porównywanie RTL z modelem w trakcie wykonania \\
+model referencyjny & golden model & niezależna implementacja traktowana jako wzorzec \\
+pokrycie & coverage & miara tego, które zachowania zostały sprawdzone \\
+\bottomrule
+\end{tabularx}
+\end{center}

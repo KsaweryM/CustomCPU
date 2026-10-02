@@ -1,0 +1,198 @@
+\chapter{Programy w C na Twoim procesorze}
+\label{ch:c}
+
+\metryczka{uruchomić skompilowany kod C na procesorze, który sam zbudowałeś, bez
+systemu operacyjnego i bez libc. To terytorium, które znasz z pracy, tylko
+tym razem pod spodem jest Twój własny sprzęt.}{1--2 wieczory}{07-c-bare-metal/}
+
+\section{Toolchain}
+
+Makefile wykrywa toolchain sam. Wystarczy jedno z dwóch:
+\begin{sh}
+sudo apt install lld                      # clang już jest, brakuje tylko linkera
+sudo apt install gcc-riscv64-unknown-elf  # albo pełny toolchain GNU (umie też rv32)
+\end{sh}
+\code{make check-tools} pokazuje, czego brakuje. Moduł został sprawdzony z
+clang~18 i \code{ld.lld}~18: wszystkie programy przechodzą na emulatorze, rdzeniu
+jednocyklowym i potoku. Ścieżka GCC jest w Makefile, ale nie była testowana.
+
+\section{Od C do pliku \texttt{.hex}}
+
+\begin{figure}[h]
+\centering
+\begin{tikzpicture}[node distance=17mm, every node/.style={font=\sffamily\small}]
+  \node[blok, fill=white] (c) {\code{hello.c}\\\code{rt.c}, \code{muldiv.c}};
+  \node[blok, fill=white, below=4mm of c] (s) {\code{crt0.S}};
+  \node[blok, right=20mm of $(c)!0.5!(s)$] (o) {\code{*.o}};
+  \node[blok, right=of o] (elf) {\code{.elf}};
+  \node[blok, right=of elf] (bin) {\code{.bin}};
+  \node[blok, right=of bin, fill=zadaniejasny] (hex) {\code{.hex}};
+  \node[blok, fill=white, above=6mm of elf] (ld) {\code{link.ld}};
+  \draw[->, thick] (c) -- (o);
+  \node[sygnal, above=1mm of o] {clang -c};
+  \draw[->, thick] (s) -- (o);
+  \draw[->, thick] (o) -- node[above, sygnal]{ld.lld} (elf);
+  \draw[->, thick] (ld) -- (elf);
+  \draw[->, thick] (elf) -- node[above, sygnal]{objcopy} (bin);
+  \draw[->, thick] (bin) -- node[above, sygnal]{bin2hex} (hex);
+\end{tikzpicture}
+\caption{Kompilacja programu na nasz procesor.}
+\end{figure}
+
+Najważniejsze flagi:
+\begin{itemize}
+  \item \code{-march=rv32i -mabi=ilp32}: tylko instrukcje bazowe;
+    \code{int}, \code{long} i wskaźnik mają po 32 bity,
+  \item \code{-ffreestanding -nostdlib}: nie ma libc ani standardowego kodu startowego,
+  \item \code{-mno-relax}: linker nie zamienia adresowania na względne
+    wobec \code{gp} (nasz crt0 nie ustawia \code{gp}),
+  \item \code{-O2}: warto zobaczyć, jak dobry kod generuje kompilator
+    (\code{make dis P=bench}).
+\end{itemize}
+
+\section{Co się dzieje przed \texttt{main()}}
+
+Procesor po resecie zaczyna od \code{pc = 0} i nic nie wie o C. Kod startowy
+\plik{crt0.S} musi:
+\begin{asm}
+_start:
+    la   sp, _stack_top        # 1. stos: C go potrzebuje do zmiennych lokalnych
+    la   t0, __bss_start       # 2. zerowanie .bss: "static int x;" ma być 0
+    la   t1, __bss_end
+1:  bgeu t0, t1, 2f
+    sw   zero, 0(t0)
+    addi t0, t0, 4
+    j    1b
+2:  call main                  # 3. program
+    ...                        # 4. a0 == 0 ? TOHOST = 1 : TOHOST = (a0 << 1) | 1
+\end{asm}
+
+Sekcji \code{.data} nie trzeba kopiować, bo cały obraz programu ląduje w RAM przez
+\code{\$readmemh}. Na prawdziwym mikrokontrolerze \code{.data} leży we flashu i
+crt0 kopiuje ją do RAM.
+
+\section{Skrypt linkera}
+
+\begin{figure}[h]
+\centering
+\begin{tikzpicture}[x=1cm, y=1cm]
+  \foreach \y/\h/\n/\c in {0/0.9/{.text (crt0 najpierw!)}/akcentjasny, 0.9/0.6/.rodata/akcentjasny,
+                         1.5/0.5/.data/zadaniejasny, 2.0/0.5/.bss/zadaniejasny,
+                         2.5/1.6/{wolne}/white, 4.1/0.9/{stos $\downarrow$}/pulapkajasny} {
+    \draw[thick, fill=\c] (0,-\y) rectangle (5,-\y-\h);
+    \node[font=\sffamily\small] at (2.5,-\y-\h/2) {\n};
+  }
+  \node[sygnal, anchor=east] at (-0.1,0) {0x0000};
+  \node[sygnal, anchor=east] at (-0.1,-2.0) {\_\_bss\_start};
+  \node[sygnal, anchor=east] at (-0.1,-2.5) {\_\_bss\_end};
+  \node[sygnal, anchor=east] at (-0.1,-5.0) {0x10000 = \_stack\_top};
+\end{tikzpicture}
+\caption{Układ pamięci programu (64 KiB RAM).}
+\end{figure}
+
+Symbole \code{\_\_bss\_start}, \code{\_\_bss\_end} i \code{\_stack\_top} definiuje
+\plik{link.ld}, a używa ich \plik{crt0.S}. W ten sposób linker przekazuje adresy do
+kodu.
+
+\section{Brakujące instrukcje: \texttt{\_\_mulsi3} i spółka}
+
+RV32I nie ma mnożenia ani dzielenia. Gdy piszesz \code{a * b}, kompilator wstawia
+\code{call \_\_mulsi3}. Zwykle dostarcza ją \code{libgcc} albo
+\code{compiler-rt}, a u nas piszesz ją sam (zadanie 7.2). Zasady:
+
+\begin{itemize}
+  \item w \plik{muldiv.c} \textbf{nie wolno} używać \code{*}, \code{/} ani
+    \code{\%}, bo kompilator wywołałby te same funkcje i powstałaby nieskończona
+    rekurencja,
+  \item dzielenie przez zero ma dawać to samo co instrukcje RISC-V M:
+    $x / 0 = $ \code{0xFFFFFFFF}, $x \bmod 0 = x$,
+  \item dzielenie ze znakiem zaokrągla do zera: $-7/2 = -3$, $-7 \bmod 2 = -1$.
+\end{itemize}
+
+Mnożenie podaję jako gotowy przykład, a dzielenie piszesz sam. Mnożenie „pisemne” w systemie dwójkowym:
+\begin{cc}
+uint32_t __mulsi3(uint32_t a, uint32_t b) {
+    uint32_t r = 0;
+    while (b) {
+        if (b & 1) r += a;     // bit mnożnika ustawiony: dodaj przesuniętą mnożną
+        a <<= 1;
+        b >>= 1;
+    }
+    return r;
+}
+\end{cc}
+Dzielenie robi się analogicznie (\emph{restoring division}): przesuwaj resztę w
+lewo, dosuwaj kolejny bit dzielnej, a gdy reszta $\geq$ dzielnik, odejmij i ustaw
+bit ilorazu.
+
+Kompilator potrafi też sam wstawić wywołania \code{memset} i \code{memcpy} (np.
+przy zerowaniu tablicy na stosie), nawet jeśli ich nie używasz. Dlatego są w
+\plik{lib/rt.c}.
+
+\section{MMIO i \texttt{volatile}}
+
+\begin{cc}
+#define MMIO_PUTCHAR ((volatile uint32_t *)0x10000004)
+*MMIO_PUTCHAR = 'A';
+\end{cc}
+Bez \code{volatile} kompilator mógłby uznać dwa zapisy pod ten sam adres za zbędne
+i usunąć jeden. Na tym poziomie nie ma różnicy między zmienną a rejestrem
+urządzenia: to ten sam \code{sw}, tylko pod inny adres, który testbench (albo
+prawdziwy dekoder adresów) kieruje do urządzenia.
+
+\section{Konwencja wywołań (ilp32)}
+
+Argumenty trafiają do \code{a0}--\code{a7}, wynik do \code{a0}, adres powrotu do
+\code{ra}. Rejestry \code{s0}--\code{s11} funkcja musi zachować, więc zapisuje je
+na stosie w prologu. \code{t*} i \code{a*} może niszczyć. Stos jest wyrównany do
+16 bajtów. Typowy prolog i epilog:
+\begin{asm}
+    addi sp, sp, -16
+    sw   ra, 12(sp)
+    sw   s0, 8(sp)
+    ...
+    lw   s0, 8(sp)
+    lw   ra, 12(sp)
+    addi sp, sp, 16
+    ret
+\end{asm}
+
+\section{Zadania}
+
+\begin{zadanie}{7.1 --- Hello, world}
+\code{make} (kompilacja), \code{make emu P=hello} (emulator), \code{make run P=hello}
+(Twój rdzeń; \code{CORE=08} uruchamia potok). Pod jakim adresem leży
+\code{counter} z \plik{hello.c} i w której jest sekcji? Co by się stało bez
+zerowania \code{.bss}? Ile instrukcji wykonuje \code{hello}, a ile z nich to crt0?
+\end{zadanie}
+
+\begin{zadanie}{7.2 --- \code{lib/muldiv.c}}
+\code{make emu P=muldiv\_test}, potem \code{make run P=muldiv\_test}. Wektory
+testowe obejmują dzielenie przez zero, \code{INT\_MIN / -1} i liczby ujemne.
+\end{zadanie}
+
+\begin{zadanie}{7.3 --- Benchmark}
+\code{make run P=bench} wypisuje wyniki i liczbę cykli dla CRC32, sita
+Eratostenesa, sortowania i mnożenia macierzy. Która część jest najdroższa?
+Sprofiluj ją na poziomie sprzętu:
+\begin{sh}
+cut -d' ' -f1 build/bench.trace | sort | uniq -c | sort -rn | head
+\end{sh}
+i znajdź najczęstsze adresy w \plik{build/bench.dis}.
+\end{zadanie}
+
+\begin{zadanie}{7.4 --- Własny program}
+Napisz \plik{prog/coś.c}: liczby pierwsze do 10\,000, drzewo BST w statycznej
+tablicy albo „grę w życie” wypisywaną znakami. \code{main} zwraca 0 jako PASS.
+\end{zadanie}
+
+\begin{gotowe}
+\code{make test} → wszystkie PASS na emulatorze i na rdzeniu.
+\end{gotowe}
+
+\begin{kontrolne}
+  \item Co musi zrobić crt0, zanim wywoła \code{main}? Czego nie musi robić u nas, a musi na mikrokontrolerze?
+  \item Skąd crt0 zna adresy początku i końca \code{.bss}?
+  \item Dlaczego w \plik{muldiv.c} nie można użyć operatora \code{*}?
+  \item Co się stanie, gdy usuniesz \code{volatile} z definicji \code{MMIO\_PUTCHAR} i skompilujesz z \code{-O2}?
+\end{kontrolne}

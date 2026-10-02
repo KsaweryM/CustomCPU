@@ -1,0 +1,107 @@
+\addchap{Wstęp}
+
+\section*{O czym jest ten kurs}
+
+Celem kursu jest zbudowanie od zera procesora RISC-V (RV32I) w SystemVerilogu,
+najpierw w wersji jednocyklowej, a potem jako klasyczny 5-etapowy potok,
+i uruchomienie na nim programów skompilowanych z C. Po drodze powstaje
+wszystko, czego potrzebuje projektant procesora: emulator referencyjny,
+infrastruktura testowa, co-symulacja i fuzzing.
+
+Notatki zakładają, że znasz C i programowanie niskopoziomowe (wskaźniki,
+pamięć, ABI, asembler w zarysie). Nie zakładają znajomości języków opisu
+sprzętu ani elektroniki. Tam, gdzie intuicja programisty C prowadzi na
+manowce, znajdziesz czerwone ramki \emph{Pułapka}.
+
+\section*{Jak czytać te notatki}
+
+Każdy rozdział odpowiada jednemu modułowi kursu (katalogowi \plik{NN-nazwa/}).
+Rozdział zaczyna się od metryczki (cel, czas, katalog), potem jest teoria z
+przykładami, zadania (zielone ramki) i pytania kontrolne. Rozwiązania zadań
+piszesz w plikach \plik{rtl/*.sv} danego modułu, a gotowe testy w
+\plik{tb/} mówią, czy działa.
+
+\begin{center}
+\small
+\begin{tabularx}{\linewidth}{@{}c l X r@{}}
+\toprule
+\textbf{Rozdz.} & \textbf{Moduł} & \textbf{Co budujesz} & \textbf{Wieczory} \\
+\midrule
+0 & \plik{00-start} & narzędzia, licznik, pierwszy testbench & 1 \\
+1 & \plik{01-kombinacyjna} & mux, enkoder, sumator, barrel shifter; szerokości, zatrzaski & 2 \\
+2 & \plik{02-sekwencyjna} & rejestry, timing, pamięci, FSM, FIFO, UART & 2--3 \\
+3 & \plik{03-alu-regfile} & ALU, bank rejestrów, komparator skoków & 1--2 \\
+4 & \plik{04-isa-emulator} & RV32I na poziomie bitów, generator immediate'ów, emulator w C & 2--3 \\
+5 & \plik{05-single-cycle} & dekoder, LSU, procesor jednocyklowy & 3--4 \\
+6 & \plik{06-weryfikacja} & co-symulacja, fuzzing, Verilator, mutacje & 1--2 \\
+7 & \plik{07-c-bare-metal} & crt0, skrypt linkera, \code{\_\_mulsi3}: C na Twoim CPU & 1--2 \\
+8 & \plik{08-pipeline} & potok 5-etapowy: forwarding, stalle, flush & 4--6 \\
+9 & \plik{09-dalej} & rozszerzenie M, przerwania, FPGA, cache, formalna & --- \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+Moduły trzeba robić po kolei. Moduł 5 używa Twoich plików z modułów 3 i 4,
+moduł 6 używa emulatora z modułu 4, a moduł 8 używa wszystkiego.
+
+\section*{Narzędzia}
+
+\begin{tabularx}{\linewidth}{@{}l X@{}}
+\toprule
+\textbf{Narzędzie} & \textbf{Do czego} \\
+\midrule
+Icarus Verilog (\code{iverilog}, \code{vvp}) & symulacja zdarzeniowa, 4 wartości logiczne, główny symulator kursu \\
+GTKWave & oglądanie przebiegów (pliki \code{.vcd}) \\
+Verilator & lint (\emph{-Wall dla sprzętu}) i szybka symulacja \\
+Yosys & synteza: ile bramek, jak długa ścieżka krytyczna \\
+\code{rvtool.py} & asembler i disasembler RV32I(M) dołączony do kursu \\
+clang + \code{ld.lld} albo GCC dla RISC-V & tylko w rozdziale 7 (C na procesorze) \\
+\bottomrule
+\end{tabularx}
+
+\medskip
+Do rozdziału 7 potrzebny jest linker: \code{sudo apt install lld} (albo
+pełny toolchain \code{gcc-riscv64-unknown-elf}). Pozostałe rozdziały nie
+wymagają żadnego toolchaina RISC-V.
+
+\section*{Rytm pracy}
+
+W każdym module te same polecenia (uruchamiane z katalogu modułu):
+
+\begin{sh}
+make test               # wszystkie testy modułu (na starcie: same FAIL)
+make unit T=mux4        # jeden test jednostkowy
+make wave T=mux4        # przebiegi w GTKWave
+make lint               # Verilator --lint-only
+make synth T=adder      # Yosys: bramki i najdłuższa ścieżka
+\end{sh}
+
+W modułach z procesorem (5--8) dochodzą:
+
+\begin{sh}
+make progs              # 12 programów testowych na Twoim rdzeniu
+make prog P=08_fib      # jeden program: wyjście + ślad wykonania
+make cosim              # porównanie śladu z emulatorem
+make fuzz N=100         # losowe programy + porównanie z emulatorem
+make progs SIM=verilator
+\end{sh}
+
+\begin{uwaga}[Rada]
+Zrób z katalogu kursu repozytorium git i commituj po każdym zadaniu. Przy
+potoku (rozdział 8) możliwość powrotu do ostatniej działającej wersji jest
+bezcenna.
+\end{uwaga}
+
+\section*{Konwencje}
+
+\begin{itemize}
+  \item SystemVerilog w podzbiorze rozumianym przez Icarus 12, Verilatora i
+    Yosysa: \code{logic}, \code{always\_comb}, \code{always\_ff},
+    \code{typedef enum}, pakiety.
+  \item \code{always\_comb} z przypisaniem \code{=} dla logiki kombinacyjnej,
+    \code{always\_ff} z \code{<=} dla rejestrów. Bez wyjątków.
+  \item Jeden zegar \code{clk}, reset \emph{synchroniczny}, aktywny w stanie
+    wysokim (\code{rst}).
+  \item Stałe architektury zawsze z pakietu \code{rv32i\_pkg}
+    (\plik{common/rtl/rv32i\_pkg.sv}), nigdy „magiczne liczby”.
+\end{itemize}

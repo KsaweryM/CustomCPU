@@ -1,0 +1,336 @@
+\chapter{Logika kombinacyjna}
+\label{ch:komb}
+
+\metryczka{pisać logikę kombinacyjną świadomie: wiedzieć, jaki sprzęt powstaje z
+każdej linii, i nie dać się złapać na szerokości wyrażeń ani zatrzaski.}
+{2 wieczory}{01-kombinacyjna/}
+
+\section{\texttt{assign} i \texttt{always\_comb}}
+
+Obie konstrukcje opisują logikę kombinacyjną:
+
+\begin{sv}
+assign y = sel ? a : b;
+
+always_comb begin
+  if (sel) y = a;
+  else     y = b;
+end
+\end{sv}
+
+W \code{always\_comb} używamy przypisania \emph{blokującego} \code{=}. Wewnątrz
+bloku działa jak w C, bo kolejne linie widzą wyniki poprzednich, ale cały blok to
+\emph{jedna} sieć bramek liczona „natychmiast”. Zmienna pośrednia jest tylko nazwą
+dla przewodu:
+
+\begin{sv}
+always_comb begin
+  t = a ^ b;        // t: nazwa dla przewodu z wyjścia bramki XOR
+  y = t & c;
+end
+\end{sv}
+
+\code{always\_comb} (w odróżnieniu od starego \code{always @(*)}) informuje też
+narzędzia o Twoim zamiarze: jeśli wyjdzie z niego coś, co nie jest
+kombinacyjne (zatrzask), Yosys odmówi syntezy.
+
+\section{Wektory: wycinanie, sklejanie, powielanie}
+
+\begin{sv}
+logic [31:0] x;
+x[7:0]                    // najmłodszy bajt
+x[31]                     // bit znaku
+x[8*i +: 8]               // bajt i: 8 bitów od pozycji 8*i w górę (i może być zmienną)
+{a, b}                    // sklejenie: a na starszych bitach
+{4{b}}                    // b powtórzone 4 razy
+{{20{x[31]}}, x[31:20]}   // rozszerzenie znakiem 12 -> 32 bity (rozdział 4!)
+{cout, sum} = a + b;      // sklejenie po lewej: wynik z przeniesieniem
+\end{sv}
+
+\section{Liczby ze znakiem w sprzęcie}
+
+Sprzęt nie „wie”, czy wektor bitów jest liczbą ze znakiem. Kod
+uzupełnień do dwóch (U2) jest wybrany właśnie dlatego, że \emph{ten sam
+sumator} poprawnie dodaje liczby ze znakiem i bez znaku. Znak ma znaczenie
+tylko w kilku operacjach:
+
+\begin{center}
+\begin{tabular}{@{}lll@{}}
+\toprule
+Operacja & bez znaku & ze znakiem \\
+\midrule
+porównanie \code{<} & \code{a < b} & \code{\$signed(a) < \$signed(b)} \\
+przesunięcie w prawo & \code{a >> n} (wsuwa 0) & \code{\$signed(a) >>> n} (powiela bit znaku) \\
+rozszerzanie do szerszego typu & zerami & kopiami bitu znaku \\
+mnożenie (górna połowa), dzielenie & osobne układy & osobne układy \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Negacja w U2: $-x = \overline{x} + 1$. Stąd odejmowanie $a - b = a +
+\overline{b} + 1$, czyli \emph{sumator z negacją jednego wejścia i
+przeniesieniem wejściowym 1}. Z tego triku skorzysta ALU w rozdziale 3.
+
+\section{Szerokości wyrażeń: najczęstsze źródło błędów}
+
+W C typ wyrażenia zależy od typów argumentów. W SystemVerilogu \textbf{szerokość
+obliczeń zależy też od lewej strony przypisania}:
+
+\begin{sv}
+logic [7:0] a, b, s8;
+logic [8:0] s9;
+s8 = a + b;   // liczone na 8 bitach: przeniesienie ginie
+s9 = a + b;   // liczone na 9 bitach: przeniesienie trafia do s9[8]
+\end{sv}
+
+\begin{itemize}
+  \item Wyrażenie arytmetyczne liczy się w szerokości $\max$(operandy, lewa
+    strona). Węższe operandy są rozszerzane.
+  \item Liczba bez rozmiaru (\code{5}) ma 32 bity i jest \emph{signed}.
+    \code{1'b1} ma 1 bit.
+  \item \textbf{Jeśli którykolwiek operand jest unsigned, całe wyrażenie jest
+    unsigned.} \code{logic} jest domyślnie unsigned.
+\end{itemize}
+
+\begin{pulapka}[\texttt{>>>} bez \texttt{\$signed}]
+\code{a >>> n} na wektorze unsigned to zwykłe \code{>>}. Przesunięcie
+arytmetyczne wymaga \code{\$signed(a) >>> n}. Podobnie \code{a < b} na
+\code{logic} porównuje bez znaku. Ten błąd wychodzi dopiero na liczbach ujemnych,
+dlatego testy kursu celowo używają \code{0x80000000} i \code{0xFFFFFFFF}.
+\end{pulapka}
+
+Verilator (\code{make lint}) ostrzega o niejawnym obcinaniu i rozszerzaniu
+(\code{WIDTHTRUNC}, \code{WIDTHEXPAND}). Traktuj te ostrzeżenia poważnie.
+
+\section{Jaki sprzęt powstaje}
+
+\begin{center}
+\begin{tabularx}{\linewidth}{@{}l X l@{}}
+\toprule
+\textbf{Konstrukcja} & \textbf{Sprzęt} & \textbf{Koszt} \\
+\midrule
+\code{\& | \^{} \~{}} & bramki, po jednej na bit & 1 poziom \\
+\code{c ? a : b}, \code{if/else} & multiplekser 2:1 & tani \\
+\code{case} na $N$ wartości & multiplekser $N$:1 (drzewo, $\log_2 N$ poziomów) & umiarkowany \\
+\code{a == b} & XOR-y i drzewo OR & tani \\
+\code{a + b}, \code{a - b}, \code{a < b} & sumator (łańcuch przeniesień) & średni \\
+\code{a << b} ($b$ zmienne) & $\log_2 N$ warstw multiplekserów & spory \\
+\code{a * b} & macierz sumatorów & \textbf{drogi} \\
+\code{a / b}, \code{a \% b} & sieć odejmowań & \textbf{bardzo drogi} \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\paragraph{Ścieżka krytyczna.} Sygnał musi przejść przez najdłuższy łańcuch
+bramek w ciągu jednego taktu zegara. Im dłuższy łańcuch, tym niższa
+maksymalna częstotliwość. \code{make synth} podaje to jako \emph{longest
+topological path}, czyli liczbę bramek na najdłuższej drodze. To przybliżenie, bo
+prawdziwe opóźnienia zależą od technologii, ale dobrze pokazuje trendy.
+
+\section{Przykład: sumator ripple-carry}
+
+Sumator pełny (\emph{full adder}) dodaje trzy bity:
+\[ s = a \oplus b \oplus c_{in}, \qquad c_{out} = ab + c_{in}(a \oplus b). \]
+Łącząc $N$ takich sumatorów łańcuchem przeniesień, dostajemy sumator
+$N$-bitowy (rys.~\ref{fig:rca}). Przeniesienie z bitu 0 może wpłynąć na bit
+$N-1$, więc ścieżka krytyczna jest proporcjonalna do $N$: $O(n)$.
+
+\begin{figure}[h]
+\centering
+\begin{tikzpicture}[x=24mm]
+  \foreach \i/\n in {0/0, 1/1, 2/2, 4/N\!-\!1} {
+    \node[blok, minimum width=14mm, minimum height=10mm] (fa\i) at (-\i,0) {FA};
+    \draw[<-, thick] ($(fa\i.north)+(-3mm,0)$) -- ++(0,6mm) node[above left=-1mm, sygnal]{a$_{\n}$};
+    \draw[<-, thick] ($(fa\i.north)+(3mm,0)$) -- ++(0,6mm) node[above right=-1mm, sygnal]{b$_{\n}$};
+    \draw[->, thick] (fa\i.south) -- ++(0,-6mm) node[below, sygnal]{s$_{\n}$};
+  }
+  \node at (-3,0) {$\cdots$};
+  \draw[<-, thick] (fa0.east) -- ++(6mm,0) node[right, sygnal]{c$_{in}$};
+  \draw[->, thick] (fa0.west) -- (fa1.east);
+  \draw[->, thick] (fa1.west) -- (fa2.east);
+  \draw[->, thick] (fa2.west) -- ($(-3,0)+(5mm,0)$);
+  \draw[->, thick] ($(-3,0)+(-5mm,0)$) -- (fa4.east);
+  \draw[->, thick] (fa4.west) -- ++(-6mm,0) node[left, sygnal]{c$_{out}$};
+  \draw[decorate, decoration={brace, amplitude=5pt, mirror}, akcent] ($(fa4.south west)+(0,-11mm)$) -- node[below=6pt, etykieta]{ścieżka krytyczna: przez wszystkie przeniesienia} ($(fa0.south east)+(0,-11mm)$);
+\end{tikzpicture}
+\caption{Sumator ripple-carry z $N$ sumatorów pełnych.}
+\label{fig:rca}
+\end{figure}
+
+Szybsze sumatory (carry-lookahead, Kogge--Stone) liczą przeniesienia
+równolegle w $O(\log n)$ poziomach kosztem większej liczby bramek. Na FPGA
+operator \code{+} trafia na dedykowane łańcuchy przeniesień, wielokrotnie
+szybsze od sumatora złożonego ręcznie z LUT-ów. Wniosek praktyczny:
+\textbf{pisz \code{+} i pozwól narzędziom wybrać implementację}. Ręczna
+budowa ma sens tylko w celach dydaktycznych albo gdy wiesz, po co.
+
+\section{\texttt{if} kontra \texttt{case} i priorytety}
+
+\begin{sv}
+always_comb begin            // łańcuch priorytetów: a wygrywa z b, b z c
+  if (a)      y = 1;
+  else if (b) y = 2;
+  else if (c) y = 3;
+  else        y = 0;
+end
+\end{sv}
+
+Kolejne \code{else if} to kaskada multiplekserów (rys.~\ref{fig:prio}).
+Warunek z \emph{pierwszego} \code{if} jest najbliżej wyjścia, więc ma najwyższy
+priorytet. Gdy warunki się wykluczają (np. różne wartości jednego sygnału),
+\code{case} lepiej oddaje intencję i daje syntezatorowi swobodę zbudowania
+płaskiego drzewa.
+
+\begin{figure}[h]
+\centering
+\begin{tikzpicture}[x=22mm]
+  \foreach \i/\c/\v in {1/c/3, 2/b/2, 3/a/1} {
+    \pic (m\i) at (\i,0) {muks};
+    \draw[<-, thick] (m\i-sel) -- ++(0,-7mm) node[below, sygnal]{\c};
+    \draw[<-, thick] (m\i-in1) -- ++(-7mm,0) node[left, sygnal]{\v};
+  }
+  \draw[<-, thick] (m1-in0) -- ++(-7mm,0) node[left, sygnal]{0};
+  \draw[->, thick] (m1-out) -- ++(5mm,0) |- (m2-in0);
+  \draw[->, thick] (m2-out) -- ++(5mm,0) |- (m3-in0);
+  \draw[->, thick] (m3-out) -- ++(8mm,0) node[right, sygnal]{y};
+\end{tikzpicture}
+\caption{\code{if / else if / else} jako łańcuch multiplekserów 2:1. Wejście 1 jest wybierane, gdy warunek (nóżka u dołu) jest prawdziwy; warunek \code{a} jest najbliżej wyjścia, więc ma najwyższy priorytet.}
+\label{fig:prio}
+\end{figure}
+
+\section{Zatrzaski: błąd numer jeden}
+
+\begin{sv}
+always_comb begin
+  if (en) y = a;    // a gdy en == 0? y ma "pamiętać" starą wartość!
+end
+\end{sv}
+
+Skoro \code{y} ma pamiętać wartość przy \code{en = 0}, syntezator musi wstawić
+element pamiętający, czyli \emph{zatrzask} sterowany poziomem. W układach
+synchronicznych to prawie zawsze błąd: psuje analizę czasową, a układ zachowuje
+się inaczej na krzemie niż w symulacji.
+
+\textbf{Lekarstwo:} każda zmienna przypisywana w \code{always\_comb} musi dostać
+wartość na \emph{każdej} ścieżce. Najprościej przez przypisanie domyślne na
+początku bloku:
+
+\begin{sv}
+always_comb begin
+  y = '0;           // wartość domyślna
+  if (en) y = a;
+end
+\end{sv}
+
+To samo dotyczy \code{case} bez \code{default}, gdy nie wszystkie wartości są
+pokryte.
+
+\section{Pętle \texttt{for} i \texttt{generate}: kopiowanie sprzętu}
+
+\begin{sv}
+always_comb begin
+  parity = 1'b0;
+  for (int i = 0; i < 32; i++)
+    parity = parity ^ x[i];       // 32 bramki XOR połączone łańcuchem
+end
+\end{sv}
+
+Pętla jest \textbf{rozwijana w czasie syntezy}: nie ma tu licznika ani iteracji
+w czasie, tylko 32 kopie logiki. Liczba iteracji musi być stała.
+(Syntezator zwykle przebuduje ten łańcuch w drzewo o głębokości $\log_2 32$, bo XOR
+jest łączny.)
+
+Do powielania \emph{instancji} modułów służy \code{generate}:
+\begin{sv}
+genvar i;
+generate
+  for (i = 0; i < WIDTH; i++) begin : g_fa      // etykieta bloku jest wymagana
+    full_adder fa (.a(a[i]), .b(b[i]), .cin(c[i]), .s(sum[i]), .cout(c[i+1]));
+  end
+endgenerate
+\end{sv}
+
+\section{Przykład: przesuwnik logarytmiczny}
+
+Przesunięcie o zmienną liczbę bitów $0..31$ można zbudować z 5 warstw
+multiplekserów: warstwa $k$ przesuwa o $2^k$ albo nie, zależnie od bitu
+\code{shamt[k]} (rys.~\ref{fig:barrel}). Każda liczba $0..31$ jest sumą
+niektórych potęg dwójki. Przesunięcie w lewo uzyskuje się, odwracając
+kolejność bitów, przesuwając w prawo i odwracając z powrotem.
+
+\begin{figure}[h]
+\centering
+\begin{tikzpicture}[x=19mm]
+  \node[sygnal] (in) at (0,0) {a};
+  \foreach \k/\s in {1/1, 2/2, 3/4, 4/8, 5/16} {
+    \node[blok, minimum width=13mm, minimum height=9mm, font=\sffamily\scriptsize] (l\k) at (\k,0) {$\gg\!\s$\\lub nic};
+    \draw[<-, thick] (l\k.south) -- ++(0,-5mm) node[below, sygnal]{shamt[\the\numexpr\k-1\relax]};
+  }
+  \draw[->, thick] (in) -- (l1);
+  \foreach \k [evaluate=\k as \j using int(\k+1)] in {1,...,4} { \draw[->, thick] (l\k) -- (l\j); }
+  \draw[->, thick] (l5) -- ++(13mm,0) node[right, sygnal]{y};
+\end{tikzpicture}
+\caption{Barrel shifter: 5 warstw po 32 multipleksery 2:1.}
+\label{fig:barrel}
+\end{figure}
+
+\section{Znane ograniczenia Icarus Verilog 12}
+
+Icarus nie obsługuje całego SystemVeriloga. W RTL rzadko to przeszkadza, ale
+warto wiedzieć:
+\begin{itemize}
+  \item brak \code{break} i \code{continue} w pętlach,
+  \item brak inicjalizacji całej tablicy w deklaracji (\code{logic [7:0] t [4] = '\{...\}}),
+  \item \code{unique case} i \code{priority case} są akceptowane, ale ignorowane,
+  \item komunikat \emph{sorry: constant selects in always\_* processes} to tylko
+    ostrzeżenie (Makefile go ukrywa).
+\end{itemize}
+
+\section{Zadania}
+
+\begin{zadanie}{1.1 --- Multiplekser (\code{rtl/mux4.sv})}
+Dwie wersje: \code{always\_comb} z \code{case} oraz jeden \code{assign} z
+operatorem \code{?:}. Test sprawdza instancje 8- i 16-bitową, czyli też to, czy
+parametr działa.
+\end{zadanie}
+
+\begin{zadanie}{1.2 --- Enkoder priorytetowy (\code{rtl/prio\_enc.sv})}
+\code{idx} = numer najstarszego ustawionego bitu, \code{valid} = czy jakikolwiek.
+Użyj pętli \code{for}. Pętla od bitu 0 do 7, w której każde trafienie nadpisuje
+\code{idx}, daje regułę „najstarszy wygrywa”. Dlaczego? Narysuj powstały
+łańcuch multiplekserów.
+\end{zadanie}
+
+\begin{zadanie}{1.3 --- Sumator ripple-carry (\code{rtl/adder.sv})}
+Najpierw \code{full\_adder} z samych bramek, potem \code{adder} przez
+\code{generate}, bez operatora \code{+}. Test sprawdza \emph{wszystkie}
+kombinacje dla 8 bitów ($2^{17}$ przypadków) i losowe dla 32. Potem
+\code{make synth T=adder}: zanotuj liczbę komórek i ścieżkę, zastąp ciało
+modułu wersją \code{assign \{cout, sum\} = a + b + cin;} i porównaj.
+\end{zadanie}
+
+\begin{zadanie}{1.4 --- Barrel shifter (\code{rtl/shifter.sv})}
+SLL, SRL i SRA o \code{shamt} z 5 warstw multiplekserów, bez operatorów
+przesunięcia. Ile multiplekserów 2:1 ma Twój układ (bez odwracania)? Porównaj z
+\code{make synth T=shifter}.
+\end{zadanie}
+
+\begin{zadanie}{1.5 --- Polowanie na zatrzask (\code{rtl/hex7seg.sv})}
+Dekoder 7-segmentowy ma dwa błędy prowadzące do zatrzasku. Zanim cokolwiek
+poprawisz, uruchom \code{make lint}, \code{make synth T=hex7seg} i
+\code{make unit T=hex7seg}. Zauważ, że lint znajduje tylko jeden z dwóch
+błędów, a Yosys odmawia syntezy z komunikatem \emph{Latch inferred}. Potem
+popraw kod i dokończ tablicę A--F.
+\end{zadanie}
+
+\begin{gotowe}
+\code{make test} → 5 × PASS, \code{make lint} → wszystko OK.
+\end{gotowe}
+
+\begin{kontrolne}
+  \item Ile bitów ma wynik \code{a + b} dla 8-bitowych \code{a}, \code{b} przy przypisaniu do 16-bitowej zmiennej? A do 8-bitowej?
+  \item Co da \code{\$signed(8'hF0) >>> 2}, a co \code{8'hF0 >>> 2}?
+  \item Dlaczego \code{if} bez \code{else} w \code{always\_comb} tworzy zatrzask, a w \code{always\_ff} nie?
+  \item Czym różni się pętla \code{for} w RTL od pętli w C? Co jest stałe w czasie syntezy?
+  \item Jak głęboka (w poziomach logiki) jest ścieżka krytyczna sumatora ripple-carry dla $N$ bitów, a jak przesuwnika logarytmicznego?
+\end{kontrolne}

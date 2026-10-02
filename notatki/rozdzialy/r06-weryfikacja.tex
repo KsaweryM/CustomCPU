@@ -1,0 +1,169 @@
+\chapter{Weryfikacja: co-symulacja, fuzzing, Verilator}
+\label{ch:wer}
+
+\metryczka{przestać ufać zdaniu „przeszło 12 testów”. W prawdziwych projektach
+weryfikacja zajmuje więcej czasu niż projektowanie. Ten rozdział nie ma nowego
+RTL: tymi samymi narzędziami sprawdzasz rdzeń z rozdziału 5, a później potok z
+rozdziału 8.}{1--2 wieczory}{06-weryfikacja/}
+
+\section{Trzy poziomy testowania}
+
+\begin{description}
+  \item[Testy kierowane] (\emph{directed}): ręcznie napisane programy
+    sprawdzające konkretne zachowania (\plik{common/sw/tests/*.S}). Dobre na
+    start i na znane przypadki brzegowe, słabe na te, o których nie
+    pomyślałeś.
+  \item[Co-symulacja z modelem referencyjnym:] ten sam program wykonują
+    emulator i RTL, a porównujemy \emph{każdą} wykonaną instrukcję (PC, słowo,
+    zapisany rejestr, wartość). Błąd zostaje wykryty tam, gdzie powstał, a nie
+    500 instrukcji później, gdy program „coś” źle policzy.
+  \item[Testy losowe] (\emph{fuzzing}, w branży \emph{constrained random}):
+    generator tworzy tysiące programów, których nikt by ręcznie nie napisał, a
+    co-symulacja ocenia, czy RTL zgadza się z modelem. Szczególnie skuteczne
+    przy potoku: znajdują kombinacje zależności, skoków i loadów, o których nie
+    wiedziałeś, że mogą być groźne.
+\end{description}
+
+\begin{figure}[h]
+\centering
+\begin{tikzpicture}[node distance=7mm and 12mm, every node/.style={font=\sffamily\small}]
+  \node[blok, fill=white] (gen) {\code{rvgen.py}\\(losowy)};
+  \node[blok, fill=white, below=of gen] (src) {\code{tests/*.S}\\(kierowany)};
+  \node[blok, right=of $(gen)!0.5!(src)$] (asm) {\code{rvtool asm}};
+  \node[blok, right=of asm, yshift=9mm, fill=zadaniejasny] (emu) {emulator\\(rozdz. 4)};
+  \node[blok, right=of asm, yshift=-9mm, fill=pytaniejasny] (rtl) {Twój RTL\\+ \code{soc\_tb}};
+  \node[blok, right=of $(emu)!0.5!(rtl)$, fill=pulapkajasny] (cmp) {\code{tracecmp.py}};
+  \node[right=8mm of cmp, align=left, font=\sffamily\scriptsize] (res) {ZGODNE\\albo pierwsza\\różnica};
+  \draw[->, thick] (gen) -- (asm);
+  \draw[->, thick] (src) -- (asm);
+  \draw[->, thick] (asm) -- node[above left, sygnal]{.hex} (emu);
+  \draw[->, thick] (asm) -- (rtl);
+  \draw[->, thick] (emu) -- node[above right, sygnal]{ref.trace} (cmp);
+  \draw[->, thick] (rtl) -- node[below right, sygnal]{dut.trace} (cmp);
+  \draw[->, thick] (cmp) -- (res);
+\end{tikzpicture}
+\caption{Co-symulacja: ten sam program w dwóch niezależnych implementacjach.}
+\label{fig:cosim}
+\end{figure}
+
+\paragraph{Skąd model wie, co jest poprawne?} Nie wie. Emulator też może mieć
+błąd. Siła metody polega na tym, że dwie \emph{niezależne} implementacje (C i
+RTL, napisane różnymi technikami) rzadko mylą się tak samo. Gdy się różnią,
+jedna z nich ma błąd i rozstrzyga specyfikacja. Tak samo weryfikuje się
+prawdziwe procesory: otwarte rdzenie RISC-V porównują ślad z modelami Spike albo
+Sail, a programy generuje m.in. \code{riscv-dv}.
+
+\section{Ograniczenia porównania śladów}
+
+\begin{itemize}
+  \item Ślad zawiera tylko zapisy do rejestrów. Błędny \textbf{store} wyjdzie
+    dopiero przy późniejszym odczycie tego adresu. (Możliwe rozszerzenie: dodać
+    do interfejsu commit adres i daną zapisu.)
+  \item Odczyt licznika cykli (MMIO \code{CYCLES}) z natury daje różne wartości w
+    emulatorze i w RTL. Dlatego \code{make cosim} pomija test \code{12\_mmio}, a
+    ślady programów w C wywołujących \code{cycles()} rozjadą się w tym miejscu.
+  \item Ślad RTL może być dłuższy od wzorcowego, bo testbench pozwala potokowi
+    dokończyć instrukcje po zapisie do TOHOST. \code{tracecmp} porównuje
+    długość śladu wzorcowego.
+\end{itemize}
+
+\section{Verilator}
+
+Icarus to klasyczny symulator zdarzeniowy, który interpretuje opis i obsługuje
+cztery wartości logiczne. Verilator \textbf{kompiluje} RTL do C++, symuluje dwie
+wartości, myśli w cyklach zegara i jest zwykle 10--100× szybszy. Z tym samym
+testbenchem (opcja \code{--timing} obsługuje \code{\#5} i \code{@(posedge)})
+program \code{10\_recursion} na rozwiązaniu wzorcowym wykonywał się w Icarusie
+ok.\ 0,55\,s, a w Verilatorze ok.\ 0,01\,s.
+
+\begin{pulapka}[Verilator nie widzi X]
+Niezainicjowany sygnał to dla Verilatora po prostu 0, więc błędy inicjalizacji
+są ukryte. Dobra praktyka: debuguj w Icarusie, testuj masowo w Verilatorze.
+\end{pulapka}
+
+\begin{sh}
+make progs SIM=verilator       # pierwsza kompilacja trwa kilka sekund
+make fuzz N=500 SIM=verilator
+\end{sh}
+
+\section{Mutacje: kto pilnuje strażnika?}
+
+Skąd wiadomo, że testy są dobre? Wstaw do rdzenia \emph{celowy} błąd i sprawdź,
+czy go wykryją. To się nazywa \textbf{testowanie mutacyjne}. Przy tworzeniu kursu
+w ten sposób odkryłem, że pierwsza wersja testów nie wykrywała błędu w bicie 11
+immediate'a skoku warunkowego: żaden skok nie był dłuższy niż 2 KiB. Stąd
+„dalekie skoki” w \code{05\_branch.S}.
+
+\begin{center}
+\small
+\begin{tabularx}{\linewidth}{@{}r X l l l@{}}
+\toprule
+\# & \textbf{Mutant} & \textbf{progs} & \textbf{cosim} & \textbf{fuzz} \\
+\midrule
+1 & \code{sra} działa jak \code{srl} & & & \\
+2 & \code{lh} nie rozszerza znakiem & & & \\
+3 & zapis do \code{x0} nie jest ignorowany & & & \\
+4 & \code{jalr} nie zeruje bitu 0 & & & \\
+5 & \code{sb} zawsze zapisuje bajt 0 słowa & & & \\
+6 & bit 11 B-immediate'a z \code{instr[31]} zamiast \code{instr[7]} & & & \\
+7 & \code{sltiu} porównuje ze znakiem & & & \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\section{Pokrycie funkcjonalne}
+
+„Ile testów przeszło” to zła miara. Lepiej pytać, \emph{które zachowania zostały
+sprawdzone}. Czy każda instrukcja się wykonała? Czy \code{bgeu} był choć raz
+\emph{wzięty}, a nie tylko niewzięty? Czy wystąpił load tuż po store pod ten sam
+adres? Tak myśli się o pokryciu (\emph{coverage}). Narzędzia przemysłowe zbierają
+je automatycznie (\code{covergroup} w SystemVerilogu). W kursie policzysz je
+skryptem ze śladów.
+
+\section{Zadania}
+
+Polecenia uruchamiasz z katalogu \plik{06-weryfikacja}. Domyślnie testowany jest
+rdzeń z rozdziału 5, a z \code{CORE=08} potok z rozdziału 8.
+
+\begin{zadanie}{6.1 --- Co-symulacja}
+\code{make cosim} wymaga działającego emulatora i rdzenia. Jeśli coś się
+rozjedzie, przeczytaj raport \code{tracecmp} i znajdź błąd. Pamiętaj, że może
+być także w emulatorze!
+\end{zadanie}
+
+\begin{zadanie}{6.2 --- Fuzzing}
+\code{make fuzz} (20 programów po 300 instrukcji), potem
+\code{make fuzz N=300 LEN=600 SEED=1000}. Przeczytaj \plik{common/tools/rvgen.py}
+i jeden wygenerowany program (\plik{build/core05/fuzz/r1.S}). Czego generator
+\emph{nie} tworzy?
+\end{zadanie}
+
+\begin{zadanie}{6.3 --- Polowanie na mutanty}
+Wprowadzaj do rdzenia po jednym błędzie z tabeli powyżej i wypełnij ją: który
+mechanizm wykrył błąd? Dla mutanta, którego fuzzer nie wykrywa, rozszerz
+\code{rvgen.py} tak, żeby wykrywał (np. dalekie skoki: \code{.space} między
+skokiem a celem). Na koniec cofnij mutację!
+\end{zadanie}
+
+\begin{zadanie}{6.4 --- Pokrycie}
+Napisz krótki skrypt w Pythonie, który z plików \plik{build/core05/fuzz/*.trace}
+policzy, ile razy wykonała się każda instrukcja (disasembler:
+\code{from rvtool import dis}). Czy wystąpiło wszystkie 37 instrukcji RV32I (bez
+\code{fence/ecall/ebreak})?
+\end{zadanie}
+
+\begin{zadanie}{6.5 --- Lint i synteza całego rdzenia}
+\code{make lint}, \code{make synth T=core}.
+\end{zadanie}
+
+\begin{gotowe}
+\code{make cosim} → wszystko ZGODNE, \code{make fuzz N=200} → 0 różnic, a
+fuzzer po Twojej zmianie wykrywa mutanta nr 6.
+\end{gotowe}
+
+\begin{kontrolne}
+  \item Dlaczego co-symulacja lokalizuje błąd lepiej niż test, który na końcu sprawdza wynik?
+  \item Jakie błędy przejdą niezauważone przez porównanie śladu złożonego tylko z zapisów do rejestrów?
+  \item Kiedy wolisz Icarusa, a kiedy Verilatora?
+  \item Co mierzy testowanie mutacyjne i czym różni się od pokrycia kodu?
+\end{kontrolne}

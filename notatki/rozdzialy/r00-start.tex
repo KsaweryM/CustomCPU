@@ -1,0 +1,259 @@
+\chapter{Narzędzia i pierwszy układ}
+\label{ch:start}
+
+\metryczka{zrozumieć, czym opis sprzętu różni się od programu, i opanować cykl
+\emph{napisz → zasymuluj → obejrzyj przebiegi → zlintuj → zsyntezuj}.}
+{1 wieczór}{00-start/}
+
+\section{HDL to nie jest język programowania}
+
+W C piszesz \emph{sekwencję kroków} dla procesora, który już istnieje. W
+SystemVerilogu opisujesz \emph{układ}: zbiór bramek i przerzutników
+połączonych przewodami. Wszystkie elementy działają \emph{jednocześnie} i
+\emph{bez przerwy}.
+
+\begin{sv}
+assign y = a & b;   // to NIE jest "oblicz a&b i zapisz do y":
+                    // to bramka AND na stałe połączona z przewodem y
+\end{sv}
+
+Ten sam kod ma dwa życia:
+
+\begin{center}
+\begin{tabularx}{0.92\linewidth}{@{}l X X@{}}
+\toprule
+& \textbf{Symulacja} & \textbf{Synteza} \\
+\midrule
+Narzędzie & Icarus Verilog, Verilator & Yosys (dalej: nextpnr → FPGA) \\
+Co robi & wykonuje opis jak program zdarzeniowy & zamienia opis na sieć bramek i przerzutników \\
+Co akceptuje & prawie wszystko (\code{\#5}, \code{\$display}, pliki) & tylko \emph{syntezowalny podzbiór} \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+Testbench (\plik{tb/*.sv}) żyje tylko w symulacji i może używać
+wszystkiego. Kod w \plik{rtl/} musi dać się zsyntezować, co w każdej
+chwili sprawdzisz poleceniem \code{make synth T=moduł}.
+
+\begin{pulapka}[Pułapka dla programisty C]
+Kod, który się symuluje, wcale nie musi się syntezować do tego, co myślisz.
+Pętla \code{for} to $N$ \emph{kopii} sprzętu, a nie $N$ iteracji w czasie.
+\code{if} bez \code{else} w logice kombinacyjnej tworzy zatrzask. Operatory
+\code{/} i \code{\%} budują ogromny dzielnik. Zawsze pytaj: \emph{jak
+wyglądałby ten układ na schemacie?}
+\end{pulapka}
+
+\section{Dwa rodzaje logiki}
+
+\paragraph{Logika kombinacyjna:} wyjście zależy \emph{tylko} od bieżących
+wejść, bez pamięci. Bramki, multipleksery, sumatory, dekodery.
+\begin{sv}
+always_comb y = sel ? a : b;      // multiplekser
+assign sum = a + b;               // sumator
+\end{sv}
+
+\paragraph{Logika sekwencyjna:} przerzutniki (\emph{flip-flopy})
+zapamiętują wartość na zboczu zegara. To jest \emph{stan} układu.
+\begin{sv}
+always_ff @(posedge clk) q <= d;  // rejestr: na zboczu narastającym q := d
+\end{sv}
+
+Prawie każdy układ synchroniczny ma tę samą budowę (rys.~\ref{fig:sync}):
+logika kombinacyjna liczy \emph{następny stan} z bieżącego stanu i
+wejść, a rejestry na zboczu zegara \emph{jednocześnie} go zapamiętują.
+
+\begin{figure}[h]
+\centering
+\begin{tikzpicture}[node distance=12mm]
+  \node[blok, minimum width=32mm, minimum height=14mm] (comb) {logika\\kombinacyjna};
+  \node[blok, fill=zadaniejasny, right=18mm of comb, minimum height=14mm] (reg) {rejestry\\(przerzutniki)};
+  \draw[->, thick] ($(comb.west)+(-16mm,3mm)$) node[left, etykieta]{wejścia} -- ($(comb.west)+(0,3mm)$);
+  \draw[->, thick] (comb) -- node[above, sygnal]{d (następny)} (reg);
+  \draw[->, thick] (reg.east) -- ++(14mm,0) node[right, etykieta]{wyjścia};
+  \draw[->, thick] ($(reg.east)+(6mm,0)$) |- ($(comb.south)+(0,-9mm)$) -- node[left, sygnal, pos=0.3]{q (stan)} ($(comb.south)+(0,0)$);
+  \draw[->, thick] ($(reg.south)+(0,-12mm)$) node[below, sygnal]{clk} -- (reg.south);
+\end{tikzpicture}
+\caption{Ogólny model układu synchronicznego.}
+\label{fig:sync}
+\end{figure}
+
+\section{Anatomia modułu}
+
+Plik \plik{rtl/counter.sv} (gotowy przykład):
+
+\begin{sv}
+module counter #(
+  parameter int WIDTH = 8           // parametr: stała ustalana przy tworzeniu instancji
+) (
+  input  logic             clk,
+  input  logic             rst,
+  input  logic             en,
+  output logic [WIDTH-1:0] q        // wektor WIDTH bitów, bit 0 najmłodszy
+);
+  always_ff @(posedge clk) begin
+    if (rst)     q <= '0;
+    else if (en) q <= q + 1'b1;
+  end
+endmodule
+\end{sv}
+
+\begin{itemize}
+  \item \code{logic} to typ SystemVerilog dla sygnałów, zastępujący stare
+    \code{wire} i \code{reg}. W kursie używamy wyłącznie \code{logic}.
+  \item \code{[WIDTH-1:0]} to zakres bitów: \code{q[0]} najmłodszy,
+    \code{q[WIDTH-1]} najstarszy.
+  \item Literały mają postać \code{<szerokość>'<baza><wartość>}, np.
+    \code{8'hFF}, \code{4'b1010}, \code{32'd100}, \code{1'b1}. Zapisy
+    \code{'0} i \code{'1} oznaczają „same zera” i „same jedynki” w
+    dowolnej szerokości.
+  \item Reset jest \emph{synchroniczny} (sprawdzany na zboczu) i aktywny w
+    stanie 1. Tej konwencji trzymamy się w całym kursie.
+\end{itemize}
+
+Instancja, czyli „wstawienie układu do innego układu”:
+\begin{sv}
+counter #(.WIDTH(16)) u_cnt (.clk(clk), .rst(rst), .en(1'b1), .q(value));
+counter #(.WIDTH(16)) u_cnt (.clk, .rst, .en(1'b1), .q(value)); // .clk = .clk(clk)
+\end{sv}
+
+\section{Anatomia testbencha}
+
+Testbench to moduł bez portów, który tworzy sygnały, wstawia testowany układ
+(DUT, \emph{device under test}), generuje zegar i w bloku \code{initial}
+podaje pobudzenia oraz sprawdza wyniki:
+
+\begin{sv}
+module tb_counter;
+  `include "tb_common.svh"         // makra CHECK_EQ, CHECK, tb_start/tb_finish
+  logic clk = 0, rst, en;
+  logic [7:0] q;
+  counter #(.WIDTH(8)) dut (.clk, .rst, .en, .q);
+  always #5 clk = ~clk;            // okres 10 jednostek czasu
+
+  initial begin
+    tb_start();
+    rst = 1; en = 0;
+    @(negedge clk);                // czekaj na zbocze OPADAJĄCE
+    @(negedge clk);
+    `CHECK_EQ(q, 8'd0, "po resecie")
+    rst = 0; en = 1;
+    repeat (5) @(negedge clk);
+    `CHECK_EQ(q, 8'd5, "po 5 taktach liczenia")
+    tb_finish();
+  end
+endmodule
+\end{sv}
+
+\subsection*{Dlaczego wejścia zmieniamy na zboczu opadającym?}
+
+Przerzutniki reagują na zbocze narastające. Gdyby testbench zmieniał wejście
+\emph{dokładnie} w chwili zbocza narastającego, wynik zależałby od tego, w
+jakiej kolejności symulator przetworzy oba zdarzenia. To wyścig
+(\emph{race}). Zmiana w połowie okresu usuwa problem (rys.~\ref{fig:cnt}).
+
+\begin{figure}[h]
+\centering
+\begin{tikzpicture}[x=6mm, y=6mm]
+  \node[sygnal, anchor=east] at (-0.3,0.25) {clk};
+  \foreach \i in {0,...,8} { \draw[thick] ({2*\i},0) -- ++(0,0.5) -- ++(1,0) -- ++(0,-0.5) -- ++(1,0); }
+  \node[sygnal, anchor=east] at (-0.3,-1.25) {rst};
+  \draw[thick] (0,-1) -- (3,-1) -- (3,-1.5) -- (18,-1.5);
+  \node[sygnal, anchor=east] at (-0.3,-2.75) {en};
+  \draw[thick] (0,-3) -- (3,-3) -- (3,-2.5) -- (13,-2.5) -- (13,-3) -- (18,-3);
+  \node[sygnal, anchor=east] at (-0.3,-4.25) {q};
+  \draw[thick] (0,-4) -- (2,-4) (0,-4.5) -- (2,-4.5);
+  \node[sygnal] at (1,-4.25) {X};
+  \foreach \a/\b/\v in {2/4/0, 4/6/1, 6/8/2, 8/10/3, 10/12/4, 12/18/5} {
+    \draw[thick] (\a,-4) -- (\b,-4) (\a,-4.5) -- (\b,-4.5);
+    \draw[thick] (\a,-4) -- (\a,-4.5);
+    \node[sygnal] at ({(\a+\b)/2},-4.25) {\v};
+  }
+  \foreach \x in {3,5,7,9,11,13,15} { \draw[densely dotted, szary] (\x,0.8) -- (\x,-4.8); }
+  \node[etykieta, align=center] at (9,-5.6) {kropki: zbocza opadające --- tu testbench zmienia wejścia i sprawdza wyniki};
+\end{tikzpicture}
+\caption{Przebiegi testu licznika: \code{q} zmienia się tuż po zboczu narastającym,
+na którym \code{en = 1} (a przed resetem ma wartość nieznaną X).}
+\label{fig:cnt}
+\end{figure}
+
+\section{Logika czterowartościowa: 0, 1, X, Z}
+
+Symulator zna cztery wartości bitu: \code{0}, \code{1}, \code{X}
+(\emph{nieznana}: niezainicjowany przerzutnik, konflikt dwóch sterowników
+albo wynik operacji na X) oraz \code{Z} (nikt nie steruje przewodem; w kursie
+nie występuje).
+
+X jest Twoim sprzymierzeńcem. Czerwone \code{X} w GTKWave oznacza coś
+niezainicjowanego albo nieprzypisanego. Prawdziwy sprzęt miałby tam losowe 0
+lub 1 i błąd ujawniałby się „czasem”, a symulacja pokazuje go od razu.
+
+\begin{pulapka}[Porównania z X]
+\code{a == b} z X daje X, co w \code{if} działa jak \emph{fałsz}! Operatory
+\code{===} i \code{!==} porównują dosłownie, łącznie z X. W testbenchach
+używaj \code{===}/\code{!==} (robi to makro \code{CHECK\_EQ}), w RTL zwykłego
+\code{==}.
+\end{pulapka}
+
+\section{Jak symulator wykonuje kod}
+
+Symulator zdarzeniowy utrzymuje kolejkę zdarzeń uporządkowaną w czasie. W
+jednej chwili czasu najpierw wykonuje wszystkie procesy, które się
+„obudziły” (zmiana sygnału z listy wrażliwości, zbocze zegara), a przypisania
+nieblokujące \code{<=} odkłada na koniec tej chwili (region NBA). Dlatego
+wszystkie \code{always\_ff} widzą \emph{stare} wartości rejestrów, tak jak
+prawdziwe przerzutniki taktowane jednym zegarem. Wrócimy do tego w
+rozdziale~\ref{ch:sekw}.
+
+\section{GTKWave w minutę}
+
+\begin{enumerate}
+  \item \code{make wave T=updown} otwiera GTKWave z przebiegami testu.
+  \item Po lewej, w drzewku \emph{SST}, rozwiń \code{tb\_updown}, potem \code{dut}.
+  \item Zaznacz sygnały i kliknij \emph{Append} (albo przeciągnij je na panel).
+  \item \code{Ctrl+Shift+F}: dopasuj widok do całego czasu symulacji.
+  \item Prawy klik na wektorze, \emph{Data Format}: \emph{Decimal} albo \emph{Hex}.
+  \item \emph{File → Write Save File}: zapamiętuje układ sygnałów.
+\end{enumerate}
+
+\section{Zadania}
+
+\begin{zadanie}{0.1 --- Uruchom gotowy licznik}
+\code{make unit T=counter}, potem \code{make wave T=counter}. Dodaj
+\code{clk}, \code{rst}, \code{en}, \code{q}. Znajdź moment, w którym \code{en}
+spada do 0, i sprawdź, czy \code{q} się zatrzymuje. W którym dokładnie
+momencie zmienia się \code{q} i względem którego zbocza?
+\end{zadanie}
+
+\begin{zadanie}{0.2 --- Licznik w górę/w dół (\code{rtl/updown.sv})}
+Priorytety: \code{rst} > \code{load} > \code{en}. Przy \code{en = 1} licznik
+liczy w górę albo w dół (\code{up}) z zawijaniem. Wyjście kombinacyjne
+\code{tc} (\emph{terminal count}) = 1 dokładnie wtedy, gdy \code{en = 1} i
+następny krok spowoduje zawinięcie. Test porównuje układ z modelem przez 500
+losowych taktów i wypisuje pierwsze rozbieżności z czasem symulacji. Użyj go,
+żeby znaleźć to miejsce w GTKWave.
+\end{zadanie}
+
+\begin{zadanie}{0.3 --- Pierwsza synteza}
+\code{make synth T=counter}. Yosys wypisze m.in. 8 komórek
+\code{\$\_SDFFE\_PP0P\_}: przerzutnik z synchronicznym resetem do 0 i
+zezwoleniem, czyli dokładnie to, co opisałeś. Zmień domyślne
+\code{WIDTH} na 32 i porównaj liczbę bramek oraz najdłuższą ścieżkę. Dlaczego
+ścieżka rośnie? (Podpowiedź: przeniesienie w dodawaniu.)
+\end{zadanie}
+
+\begin{zadanie}{0.4 --- Lint}
+\code{make lint} powinno zgłosić \code{OK}. Dla eksperymentu przypisz
+\code{q <= d[1:0];} przy \code{WIDTH = 4} i zobacz ostrzeżenie o
+szerokości. Verilator to Twój \code{-Wall -Werror}.
+\end{zadanie}
+
+\begin{gotowe}
+\code{make test} pokazuje PASS dla \code{counter} i \code{updown}, a \code{make lint} nie zgłasza ostrzeżeń.
+\end{gotowe}
+
+\begin{kontrolne}
+  \item Czym różni się \code{assign y = a + b;} od \code{y = a + b;} w funkcji C?
+  \item Dlaczego testbench zmienia wejścia na zboczu opadającym zegara?
+  \item Co oznacza X w przebiegach i czemu \code{if (x == 1)} przy \code{x = X} wybiera gałąź \code{else}?
+  \item Które konstrukcje z \plik{tb\_counter.sv} nie dałyby się zsyntezować i dlaczego to nie problem?
+\end{kontrolne}

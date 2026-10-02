@@ -1,0 +1,256 @@
+\chapter{Procesor jednocyklowy RV32I}
+\label{ch:single}
+
+\metryczka{złożyć działający procesor, który wykonuje prawdziwe programy w kodzie
+maszynowym RISC-V, po jednej instrukcji na takt zegara.}{3--4 wieczory}{05-single-cycle/}
+
+\section{Ścieżka danych}
+
+\begin{figure}[h]
+\centering
+\resizebox{\linewidth}{!}{\input{rysunki/datapath}}
+\caption{Ścieżka danych procesora jednocyklowego. Linie przerywane to sygnały
+sterujące z dekodera.}
+\label{fig:datapath}
+\end{figure}
+
+W jednym takcie, od zbocza do zbocza (rys.~\ref{fig:datapath}):
+\begin{enumerate}
+  \item \code{pc} adresuje pamięć instrukcji, a \code{instr} pojawia się kombinacyjnie.
+  \item Dekoder (\code{control}) i \code{imm\_gen} analizują \code{instr}, a bank
+    rejestrów czyta \code{rs1} i \code{rs2}.
+  \item ALU liczy wynik, adres dla load/store albo cel skoku dla \code{jalr}.
+  \item Load: LSU wybiera bajty ze słowa z pamięci danych. Store: LSU ustawia
+    \code{wstrb}/\code{wdata}, a zapis nastąpi na zboczu.
+  \item Multiplekser WB wybiera, co trafi do \code{rd}: wynik ALU, daną z
+    pamięci albo \code{pc+4}. Zapis nastąpi na zboczu.
+  \item Logika następnego PC wybiera \code{pc+4}, \code{pc+imm} albo
+    \code{alu\_y \& \textasciitilde1}. Nowa wartość też trafia do PC na zboczu.
+\end{enumerate}
+
+\textbf{Wszystkie efekty instrukcji (zapis rejestru, zapis pamięci, nowe PC)
+dzieją się na tym samym zboczu zegara.} Dlatego ten procesor jest taki prosty.
+Cena: okres zegara musi pomieścić całą drogę od PC przez pamięć instrukcji,
+rejestry, ALU i pamięć danych aż do zapisu.
+
+\section{Przejście instrukcji przez ścieżkę danych}
+
+\begin{center}
+\small
+\begin{tabular}{@{}llllll@{}}
+\toprule
+\textbf{Instrukcja} & \textbf{A} & \textbf{B} & \textbf{ALU} & \textbf{Do rd} & \textbf{Następne PC} \\
+\midrule
+\code{add rd, rs1, rs2} & rs1 & rs2 & \{i[30], f3\} & alu\_y & pc+4 \\
+\code{addi rd, rs1, imm} & rs1 & imm & \{0, f3\}$^*$ & alu\_y & pc+4 \\
+\code{lw rd, imm(rs1)} & rs1 & imm & ADD & load\_data & pc+4 \\
+\code{sw rs2, imm(rs1)} & rs1 & imm & ADD & --- (zapis rs2) & pc+4 \\
+\code{beq rs1, rs2, off} & --- & --- & --- & --- & taken ? pc+imm : pc+4 \\
+\code{jal rd, off} & --- & --- & --- & pc+4 & pc+imm \\
+\code{jalr rd, imm(rs1)} & rs1 & imm & ADD & pc+4 & alu\_y \& \textasciitilde1 \\
+\code{lui rd, imm} & 0 & imm & ADD & alu\_y & pc+4 \\
+\code{auipc rd, imm} & pc & imm & ADD & alu\_y & pc+4 \\
+\bottomrule
+\end{tabular}
+
+\smallskip
+{\footnotesize $^*$ dla \code{srai}: \{i[30], f3\}}
+\end{center}
+
+\section{Tabela sterowania}
+
+Wypełnij tę tabelę \textbf{na kartce}, zanim napiszesz \code{control.sv}.
+Kreska oznacza „obojętne”. Test \code{tb\_control} sprawdza dokładnie tę tabelę na 97
+zakodowanych instrukcjach i wypisuje różnice z nazwami pól.
+
+\begin{center}
+\small
+\renewcommand{\arraystretch}{1.6}
+\begin{tabular}{|l|p{9mm}|p{9mm}|p{9mm}|p{9mm}|p{9mm}|p{9mm}|p{9mm}|p{9mm}|p{9mm}|p{9mm}|}
+\hline
+& \rotatebox{90}{\code{reg\_write}\ } & \rotatebox{90}{\code{wb\_sel}\ } & \rotatebox{90}{\code{alu\_a\_sel}\ } & \rotatebox{90}{\code{alu\_b\_imm}\ } & \rotatebox{90}{\code{alu\_op}\ } & \rotatebox{90}{\code{mem\_read}\ } & \rotatebox{90}{\code{mem\_write}\ } & \rotatebox{90}{\code{branch}\ } & \rotatebox{90}{\code{jump}\ } & \rotatebox{90}{\code{jump\_reg}\ } \\
+\hline
+\textsf{OP (R)} & & & & & & & & & & \\
+\hline
+\textsf{OP-IMM} & & & & & & & & & & \\
+\hline
+\textsf{LOAD} & & & & & & & & & & \\
+\hline
+\textsf{STORE} & & & & & & & & & & \\
+\hline
+\textsf{BRANCH} & & & & & & & & & & \\
+\hline
+\textsf{JAL} & & & & & & & & & & \\
+\hline
+\textsf{JALR} & & & & & & & & & & \\
+\hline
+\textsf{LUI} & & & & & & & & & & \\
+\hline
+\textsf{AUIPC} & & & & & & & & & & \\
+\hline
+\textsf{FENCE/SYSTEM} & & & & & & & & & & \\
+\hline
+\end{tabular}
+\end{center}
+
+\begin{pulapka}[\texttt{addi} z ujemną stałą to nie \texttt{sub}]
+Dla OP-IMM \code{instr[30]} jest częścią immediate'a. Gdyby dekoder brał go do
+\code{alu\_op} jak dla R-type, \code{addi a0, a0, -1} (stała z ustawionym bitem
+30) liczyłoby się jako odejmowanie. Bit 30 ma znaczenie tylko dla \code{srai}
+(\code{funct3 = 101}).
+\end{pulapka}
+
+\section{LSU: bajty w słowie}
+
+Pamięć jest zorganizowana w 32-bitowe słowa. \code{addr[31:2]} wybiera słowo, a
+\code{addr[1:0]} bajt w słowie. Zapis częściowy realizuje maska
+\code{wstrb} (\emph{write strobe}): bit $i$ = 1 oznacza zapis bajtu $i$.
+
+\begin{figure}[h]
+\centering
+\begin{tikzpicture}[x=15mm]
+  \foreach \i/\r in {0/{[7:0]},1/{[15:8]},2/{[23:16]},3/{[31:24]}} {
+    \draw[thick, fill=akcentjasny] (3-\i,0) rectangle ++(1,0.7);
+    \node[sygnal] at (3.5-\i,0.35) {bajt \i};
+    \node[sygnal, text=szary] at (3.5-\i,-0.25) {\r};
+  }
+  \draw[thick, fill=pulapkajasny] (1,0) rectangle ++(1,0.7);
+  \node[sygnal] at (1.5,0.35) {bajt 2};
+  \node[anchor=west, font=\sffamily\small] at (4.4,0.35) {\code{sb x5, 2(x0)}: \code{wstrb = 4'b0100}, \code{wdata[23:16] = x5[7:0]}};
+\end{tikzpicture}
+\caption{Zapis bajtu pod adres o \code{addr[1:0] = 2}.}
+\end{figure}
+
+Przy odczycie pamięć zwraca całe słowo, a LSU przesuwa je o
+\code{8*addr[1:0]} i rozszerza znakiem (\code{lb}, \code{lh}) albo zerami
+(\code{lbu}, \code{lhu}).
+
+\section{Interfejs rdzenia: kontrakt z testbenchem}
+
+\begin{sv}
+module core import rv32i_pkg::*; (
+  input  logic        clk, rst,
+  output logic [31:0] imem_addr,  input logic [31:0] imem_rdata,
+  output logic [31:0] dmem_addr,  output logic dmem_re,
+  input  logic [31:0] dmem_rdata,
+  output logic [3:0]  dmem_wstrb, output logic [31:0] dmem_wdata,
+  output logic        commit_valid,                    // ślad wykonania
+  output logic [31:0] commit_pc, commit_instr, commit_rd_val,
+  output logic [4:0]  commit_rd
+);
+\end{sv}
+
+\begin{itemize}
+  \item Pamięć (64 KiB) jest \emph{jedna}, widziana przez dwa porty. Odczyt jest
+    kombinacyjny, a zapis następuje na zboczu, gdy \code{dmem\_wstrb != 0}.
+  \item \code{dmem\_addr} to pełny adres bajtowy, a \code{dmem\_rdata} całe
+    słowo. Wybór bajtów robi Twoje LSU.
+  \item Reset synchroniczny, a po nim \code{pc = 0}.
+  \item \textbf{Interfejs commit} służy tylko do weryfikacji. W każdym takcie,
+    w którym kończy się instrukcja, \code{commit\_valid = 1} i opis tej
+    instrukcji. \code{commit\_rd = 0}, gdy instrukcja nie zapisuje rejestru.
+\end{itemize}
+
+Testbench (\plik{common/tb/soc\_tb.sv}) przerywa symulację z czytelnym
+komunikatem, gdy: PC jest X po resecie, \code{commit\_valid} jest X, następuje
+zapis pod adres X albo nieobsługiwany adres, wykona się słowo
+\code{0x00000000} (skok w pustą pamięć), przez 1000 taktów nie ma commitu albo
+przekroczony zostanie limit cykli.
+
+\section{Jak debugować procesor}
+
+\begin{enumerate}
+  \item Zacznij od \textbf{najprostszego testu}, który nie przechodzi:
+    \code{make prog P=01\_smoke}.
+  \item \textbf{Ślad.} \code{make prog P=...} zapisuje \plik{build/P.trace}.
+    Porównaj go z emulatorem:
+\begin{sh}
+make -C ../04-isa-emulator emu-test P=05_branch
+python3 ../common/tools/tracecmp.py ../04-isa-emulator/build/05_branch.trace \
+                                    build/05_branch.trace
+\end{sh}
+    Wynik pokazuje pierwszą różniącą się instrukcję z disasemblacją i
+    podpowiedzią: inne PC oznacza błąd skoku, inna wartość błąd wykonania.
+  \item \textbf{Listing} \plik{build/hex/P.lst} łączy adresy z liniami źródła.
+  \item \textbf{Przebiegi}: \code{make wave P=05\_branch}. Dodaj \code{dut.pc},
+    \code{imem\_rdata}, sygnały sterujące i \code{commit\_*}.
+  \item „FAIL: podtest N” oznacza, że w źródle testu przed nieudanym sprawdzeniem
+    stoi \code{li gp, N}.
+\end{enumerate}
+
+Przykładowy raport \code{tracecmp} dla błędu w dekoderze:
+
+\begin{txt}
+RÓŻNICA w instrukcji nr 12:
+  ostatnie zgodne:
+    00000024: 00500593  addi a1, zero, 5                 x11=00000005
+  oczekiwano (ref): 00000028: fff58593  addi a1, a1, -1   x11=00000004
+  jest       (RTL): 00000028: fff58593  addi a1, a1, -1   x11=00000006
+  -> ta sama instrukcja, inny efekt: błąd wykonania (ALU, LSU, forwarding...)
+\end{txt}
+
+\section{Programy testowe}
+
+\begin{center}
+\small
+\begin{tabularx}{\linewidth}{@{}l X@{}}
+\toprule
+\code{01\_smoke} & tylko \code{lui}, \code{addi}, \code{sw}: najprostszy możliwy test \\
+\code{02\_alu\_imm}, \code{03\_alu\_reg} & ALU z immediate i rejestr-rejestr, przypadki brzegowe \\
+\code{04\_lui\_auipc} & stałe górne i adresowanie względem PC \\
+\code{05\_branch} & wszystkie skoki warunkowe, także dalekie ($>$2 KiB) \\
+\code{06\_jal\_jalr} & adresy powrotu, \code{rd == rs1}, stos, zagnieżdżone wywołania \\
+\code{07\_load\_store} & wszystkie szerokości, rozszerzanie znakiem i zerami \\
+\code{08\_fib}, \code{09\_sort}, \code{10\_recursion} & „prawdziwe” programy: pętle, tablice, rekurencja \\
+\code{11\_hazards} & sekwencje groźne dla potoku (rozdział 8) \\
+\code{12\_mmio} & wypisuje napis przez PUTCHAR i czyta licznik cykli \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+Gdy przejdzie \code{12\_mmio}, zobaczysz w terminalu tekst wypisany przez
+Twój procesor.
+
+\section{Zadania}
+
+\begin{zadanie}{5.1 --- Dekoder (\code{rtl/control.sv})}
+\code{make unit T=control}.
+\end{zadanie}
+
+\begin{zadanie}{5.2 --- LSU (\code{rtl/lsu.sv})}
+\code{make unit T=lsu}. Rozrysuj sobie słowo z czterema bajtami i zobacz, gdzie
+trafia \code{sb} pod \code{addr[1:0] = 3}.
+\end{zadanie}
+
+\begin{zadanie}{5.3 --- Rdzeń (\code{rtl/core.sv})}
+Złóż ścieżkę danych z gotowych bloków. Moduły z rozdziałów 3 i 4 są dołączane z
+tamtych katalogów, więc poprawka w \plik{alu.sv} od razu działa także tutaj.
+\code{make progs} uruchamia 12 programów, \code{make prog P=08\_fib} jeden, a
+\code{make test} wszystko.
+\end{zadanie}
+
+\begin{zadanie}{5.4 --- Pomiary}
+\code{make synth T=core}: ile komórek ma Twój procesor w porównaniu z sumą ALU
+i banku rejestrów? CPI wynosi z definicji 1,000. W rozdziale 8 porównasz to z
+potokiem.
+\end{zadanie}
+
+\begin{uwaga}[Uwaga o długości ścieżki]
+Pamięci są w testbenchu, poza modułem \code{core}, więc Yosys widzi osobne
+kawałki: PC → \code{imem\_addr}, \code{imem\_rdata} → … → \code{dmem\_addr} oraz
+\code{dmem\_rdata} → rejestry. Prawdziwy takt procesora jednocyklowego to
+\emph{suma}: odczyt imem + dekodowanie + rejestry + ALU + odczyt dmem + zapis.
+To jest motywacja potoku.
+\end{uwaga}
+
+\begin{gotowe}
+\code{make test} → 2 × PASS (testy jednostkowe) + 12 × PASS (programy), \code{make lint} czysto.
+\end{gotowe}
+
+\begin{kontrolne}
+  \item Wymień wszystkie elementy, przez które przechodzi \code{lw} w ciągu jednego taktu.
+  \item Po co multiplekser A ma wejścia \code{pc} i \code{0}? Które instrukcje ich używają?
+  \item Dlaczego cel \code{jalr} liczy ALU, a cel \code{jal} i \code{beq} osobny sumator?
+  \item Jakie \code{wstrb} i \code{wdata} wystawi LSU dla \code{sh x7, 2(x0)}, gdy \code{x7 = 0x1234BEEF}?
+  \item Dlaczego procesor jednocyklowy ma niską maksymalną częstotliwość zegara?
+\end{kontrolne}

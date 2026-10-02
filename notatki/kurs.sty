@@ -1,0 +1,191 @@
+% ---------------------------------------------------------------------------
+% kurs.sty — wygląd notatek do kursu "Własny procesor RISC-V w SystemVerilogu"
+% Kompilacja: LuaLaTeX (latexmk -lualatex), patrz Makefile.
+% ---------------------------------------------------------------------------
+\NeedsTeXFormat{LaTeX2e}
+\ProvidesPackage{kurs}
+
+% ---- język i czcionki (pdfLaTeX) ------------------------------------------
+\RequirePackage[T1]{fontenc}
+\RequirePackage[utf8]{inputenc}
+\RequirePackage[polish]{babel}
+\RequirePackage{lmodern}
+\RequirePackage[scaled=0.86,varqu]{zi4}   % Inconsolata do kodu
+\RequirePackage{textcomp}
+\RequirePackage{microtype}
+\RequirePackage{newunicodechar}
+\newunicodechar{≈}{\ensuremath{\approx}}
+\newunicodechar{×}{\ensuremath{\times}}
+\newunicodechar{→}{\ensuremath{\rightarrow}}
+\newunicodechar{←}{\ensuremath{\leftarrow}}
+\newunicodechar{≥}{\ensuremath{\geq}}
+\newunicodechar{≤}{\ensuremath{\leq}}
+\newunicodechar{…}{\ldots}
+
+% ---- układ strony ---------------------------------------------------------
+\RequirePackage[a4paper,margin=2.4cm,top=2.6cm,bottom=2.8cm]{geometry}
+\RequirePackage{xcolor}
+\RequirePackage{graphicx}
+\RequirePackage{booktabs,tabularx,array,multirow}
+\RequirePackage{enumitem}
+\setlist{itemsep=2pt,topsep=4pt}
+\RequirePackage{amsmath,amssymb}
+\RequirePackage[hidelinks]{hyperref}
+\RequirePackage{bookmark}
+
+% ---- kolory ----------------------------------------------------------------
+\definecolor{akcent}{HTML}{1F5FA8}
+\definecolor{akcentjasny}{HTML}{E8F0FA}
+\definecolor{pulapka}{HTML}{B3261E}
+\definecolor{pulapkajasny}{HTML}{FCEDEC}
+\definecolor{zadanie}{HTML}{1E7B34}
+\definecolor{zadaniejasny}{HTML}{EAF6EC}
+\definecolor{pytanie}{HTML}{7A4FA3}
+\definecolor{pytaniejasny}{HTML}{F3EEF8}
+\definecolor{kodtlo}{HTML}{F6F7F9}
+\definecolor{kodramka}{HTML}{D5D9E0}
+\definecolor{komentarz}{HTML}{6A737D}
+\definecolor{slowo}{HTML}{0B4F9C}
+\definecolor{napis}{HTML}{A3420F}
+\definecolor{liczba}{HTML}{116B5E}
+\definecolor{szary}{HTML}{8A8F98}
+
+% KOMA: kolory nagłówków
+\addtokomafont{disposition}{\color{akcent}}
+\addtokomafont{chapterprefix}{\color{szary}}
+\setkomafont{disposition}{\normalcolor\sffamily\bfseries\color{akcent}}
+
+% ---- listingi ----------------------------------------------------------------
+\RequirePackage{listings}
+\lstdefinelanguage{SV}{
+  morekeywords={module,endmodule,input,output,inout,logic,wire,reg,bit,int,
+    integer,parameter,localparam,assign,always,always_comb,always_ff,
+    always_latch,begin,end,if,else,case,endcase,default,for,generate,
+    endgenerate,genvar,posedge,negedge,or,and,not,initial,function,
+    endfunction,task,endtask,automatic,return,typedef,enum,struct,packed,
+    package,endpackage,import,unique,priority,while,repeat,forever,fork,
+    join,signed,unsigned,string,void,real},
+  morekeywords=[2]{$display,$finish,$signed,$unsigned,$clog2,$urandom,
+    $readmemh,$dumpfile,$dumpvars,$fopen,$fclose,$fscanf,$fdisplay,
+    $sformatf,$time,$isunknown,$value$plusargs,$test$plusargs,$write},
+  sensitive=true,
+  morecomment=[l]{//},
+  morecomment=[s]{/*}{*/},
+  morestring=[b]",
+  alsoletter={\$},
+}
+\lstdefinelanguage{RVASM}{
+  morekeywords={add,addi,sub,sll,slli,slt,slti,sltu,sltiu,xor,xori,srl,srli,
+    sra,srai,or,ori,and,andi,lui,auipc,jal,jalr,beq,bne,blt,bge,bltu,bgeu,
+    lb,lh,lw,lbu,lhu,sb,sh,sw,li,la,mv,nop,j,jr,ret,call,beqz,bnez,bgt,ble,
+    bgtz,blez,mul,div,rem,fence,ecall,ebreak,csrrw,mret},
+  morekeywords=[2]{.include,.equ,.word,.byte,.half,.space,.align,.asciz,
+    .section,.globl,.org},
+  sensitive=false,
+  morecomment=[l]{\#},
+  morestring=[b]",
+  alsoletter={.},
+}
+\lstset{
+  basicstyle=\ttfamily\small,
+  keywordstyle=\color{slowo}\bfseries,
+  keywordstyle=[2]\color{liczba},
+  commentstyle=\color{komentarz}\itshape,
+  stringstyle=\color{napis},
+  backgroundcolor=\color{kodtlo},
+  frame=single, rulecolor=\color{kodramka}, framerule=0.4pt,
+  framesep=4pt, xleftmargin=6pt, xrightmargin=6pt,
+  aboveskip=8pt, belowskip=6pt,
+  columns=fullflexible, keepspaces=true,
+  showstringspaces=false, tabsize=2,
+  breaklines=true, breakatwhitespace=true,
+  upquote=true,
+  extendedchars=true,
+  literate={ą}{{\k{a}}}1 {ć}{{\'c}}1 {ę}{{\k{e}}}1 {ł}{{\l{}}}1 {ń}{{\'n}}1
+           {ó}{{\'o}}1 {ś}{{\'s}}1 {ź}{{\'z}}1 {ż}{{\.z}}1
+           {Ą}{{\k{A}}}1 {Ć}{{\'C}}1 {Ę}{{\k{E}}}1 {Ł}{{\L{}}}1 {Ń}{{\'N}}1
+           {Ó}{{\'O}}1 {Ś}{{\'S}}1 {Ź}{{\'Z}}1 {Ż}{{\.Z}}1
+           {→}{{$\rightarrow$}}1 {←}{{$\leftarrow$}}1 {≥}{{$\geq$}}1
+           {—}{{---}}1 {–}{{--}}1 {≈}{{$\approx$}}1 {×}{{$\times$}}1 {…}{{...}}1,
+}
+\lstnewenvironment{sv}[1][]{\lstset{language=SV,#1}}{}
+\lstnewenvironment{cc}[1][]{\lstset{language=C,morekeywords={uint32_t,int32_t,uint8_t,volatile,size_t},#1}}{}
+\lstnewenvironment{asm}[1][]{\lstset{language=RVASM,#1}}{}
+\lstnewenvironment{sh}[1][]{\lstset{language=bash,morekeywords={make,cd,python3,sudo,apt,git,gtkwave},#1}}{}
+\lstnewenvironment{txt}[1][]{\lstset{language={},#1}}{}
+\newcommand{\code}[1]{\texttt{#1}}
+\newcommand{\plik}[1]{\texttt{\color{akcent}#1}}
+
+% ---- ramki -------------------------------------------------------------------
+\RequirePackage[most]{tcolorbox}
+\tcbset{ramka/.style={enhanced, breakable, boxrule=0pt, arc=2pt,
+  left=8pt, right=8pt, top=5pt, bottom=5pt, before skip=8pt, after skip=8pt,
+  fonttitle=\bfseries\sffamily\small, coltitle=white}}
+\newtcolorbox{uwaga}[1][Uwaga]{ramka, colback=akcentjasny, colframe=akcent,
+  borderline west={3pt}{0pt}{akcent}, title={#1}, attach title to upper={\ \ },
+  coltitle=akcent, fonttitle=\bfseries\sffamily}
+\newtcolorbox{pulapka}[1][Pułapka]{ramka, colback=pulapkajasny, colframe=pulapka,
+  borderline west={3pt}{0pt}{pulapka}, title={#1}, attach title to upper={\ \ },
+  coltitle=pulapka, fonttitle=\bfseries\sffamily}
+\newtcolorbox{pytanie}[1][Pytanie]{ramka, colback=pytaniejasny, colframe=pytanie,
+  borderline west={3pt}{0pt}{pytanie}, title={#1}, attach title to upper={\ \ },
+  coltitle=pytanie, fonttitle=\bfseries\sffamily}
+\newtcolorbox{zadanie}[2][]{ramka, colback=zadaniejasny, colframe=zadanie,
+  borderline west={3pt}{0pt}{zadanie}, title={Zadanie #2}, #1}
+\newtcolorbox{gotowe}{ramka, colback=zadaniejasny!60, colframe=zadanie,
+  title={Moduł zaliczony, gdy\dots}, colbacktitle=zadanie}
+
+% Nagłówek rozdziału-modułu: cel, czas, katalog
+\newcommand{\metryczka}[3]{%
+  \begin{tcolorbox}[enhanced, boxrule=0.5pt, colframe=akcent!50, colback=white,
+    arc=2pt, left=8pt, right=8pt, top=4pt, bottom=4pt]
+  \small\sffamily
+  \begin{tabularx}{\linewidth}{@{}l X@{}}
+  \textbf{Cel:} & #1 \\
+  \textbf{Czas:} & #2 \\
+  \textbf{Katalog:} & \plik{#3} \\
+  \end{tabularx}
+  \end{tcolorbox}}
+
+% Pytania kontrolne na końcu rozdziału
+\newenvironment{kontrolne}{%
+  \section*{Pytania kontrolne}\addcontentsline{toc}{section}{Pytania kontrolne}%
+  \begin{enumerate}[label=\textbf{\arabic*.}]}{\end{enumerate}}
+
+% ---- TikZ --------------------------------------------------------------------
+\RequirePackage{tikz}
+\usetikzlibrary{arrows.meta,positioning,calc,fit,shapes.geometric,
+  shapes.misc,automata,decorations.pathreplacing,matrix,backgrounds}
+\tikzset{
+  >={Stealth[length=2.2mm]},
+  blok/.style={draw, thick, rounded corners=1.5pt, fill=akcentjasny,
+    minimum height=8mm, minimum width=16mm, align=center, font=\sffamily\small},
+  rejestr/.style={draw, thick, fill=zadaniejasny, minimum width=5mm,
+    minimum height=24mm, font=\sffamily\scriptsize, align=center},
+  mux/.style={draw, thick, trapezium, trapezium angle=70, shape border rotate=270,
+    minimum height=12mm, minimum width=4mm, fill=white, font=\sffamily\tiny,
+    inner sep=1pt},
+  sygnal/.style={font=\ttfamily\scriptsize},
+  etykieta/.style={font=\sffamily\scriptsize, text=szary},
+}
+
+% Multiplekser 2:1 jako "pic": \pic (m) at (x,y) {muks};
+% współrzędne: m-in0, m-in1 (lewa strona), m-sel (dół), m-out (prawa)
+\tikzset{muks/.pic={
+  \draw[thick, fill=white] (-2mm,-6mm) -- (-2mm,6mm) -- (2mm,3.5mm) -- (2mm,-3.5mm) -- cycle;
+  \coordinate (-in1) at (-2mm,3mm);  \coordinate (-in0) at (-2mm,-3mm);
+  \coordinate (-sel) at (0,-4.8mm);  \coordinate (-out) at (2mm,0);
+  \node[font=\sffamily\tiny, inner sep=0] at (-1.1mm,3mm) {1};
+  \node[font=\sffamily\tiny, inner sep=0] at (-1.1mm,-3mm) {0};
+}}
+
+% Przebieg czasowy: \zegar{liczba okresów}{y}
+\newcommand{\zegar}[3][1]{% #1 szer. półokresu, #2 okresy, #3 y
+  \foreach \i in {1,...,#2} {
+    \draw[thick] ({(\i-1)*2*#1},#3) -- ++(0,0.5) -- ++(#1,0) -- ++(0,-0.5) -- ++(#1,0);
+  }}
+
+% numeracja rysunków i tabel zawsze z numerem rozdziału (także rozdziału 0)
+\AtBeginDocument{\renewcommand*{\thefigure}{\thechapter.\arabic{figure}}\renewcommand*{\thetable}{\thechapter.\arabic{table}}}
+
+\endinput

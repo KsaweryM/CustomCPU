@@ -1,0 +1,62 @@
+% Ścieżka danych procesora jednocyklowego (rozdział 5)
+\begin{tikzpicture}[x=1cm, y=1cm, every node/.append style={font=\sffamily\scriptsize},
+  szyna/.style={thick}, ster/.style={densely dashed, pulapka, thin, ->}]
+  % --- bloki
+  \node[draw, thick, fill=zadaniejasny, minimum width=6mm, minimum height=16mm] (pc) at (0,0) {PC};
+  \node[blok, minimum width=15mm, minimum height=16mm] (imem) at (1.9,0) {pamięć\\instrukcji};
+  \node[blok, minimum width=15mm, minimum height=9mm] (ctrl) at (5.4,2.75) {control};
+  \node[blok, minimum width=16mm, minimum height=20mm] (rf) at (5.4,0) {regfile};
+  \node[blok, minimum width=16mm, minimum height=8mm] (imm) at (5.4,-2.1) {imm\_gen};
+  \node[blok, minimum width=7mm, minimum height=10mm] (ma) at (7.9,0.55) {A};
+  \node[blok, minimum width=7mm, minimum height=10mm] (mb) at (7.9,-0.55) {B};
+  \node[blok, minimum width=12mm, minimum height=24mm, fill=pytaniejasny] (alu) at (9.5,0) {ALU};
+  \node[blok, minimum width=17mm, minimum height=8mm, fill=pytaniejasny] (br) at (9.5,-2.7) {branch\_cmp};
+  \node[blok, minimum width=17mm, minimum height=16mm] (mem) at (11.9,0) {LSU +\\pamięć\\danych};
+  \node[blok, minimum width=7mm, minimum height=14mm] (wb) at (13.9,0) {WB};
+  \node[blok, minimum width=15mm, minimum height=9mm] (npc) at (1.9,-2.6) {następny\\PC};
+  % --- PC -> imem -> instr
+  \draw[szyna, ->] (pc) -- (imem);
+  \draw[szyna] (imem.east) -- (3.4,0);
+  \draw[szyna] (3.4,2.75) -- (3.4,-2.1);
+  \node[sygnal, rotate=90, fill=white, inner sep=1pt] at (3.4,1.4) {instr};
+  \draw[szyna, ->] (3.4,2.75) -- (ctrl.west);
+  \draw[szyna, ->] (3.4,0.45) -- node[above, sygnal]{rs1, rs2, rd} ($(rf.west)+(0,0.45)$);
+  \draw[szyna, ->] (3.4,-2.1) -- (imm.west);
+  % --- regfile -> A/B -> ALU
+  \draw[szyna, ->] ($(rf.east)+(0,0.55)$) -- node[above, sygnal, pos=0.75]{rs1} (ma.west);
+  \draw[szyna, ->] ($(rf.east)+(0,-0.55)$) -- node[below, sygnal, pos=0.75]{rs2} (mb.west);
+  \draw[szyna, ->] (imm.east) -- (7.9,-2.1) node[right, sygnal, pos=0.4, yshift=5pt]{} -- (mb.south);
+  \node[sygnal] at (8.15,-1.6) {imm};
+  \draw[szyna, <-] (ma.north) -- ++(0,0.45) node[left, sygnal]{pc, 0};
+  \draw[szyna, ->] (ma.east) -- ($(alu.west)+(0,0.55)$);
+  \draw[szyna, ->] (mb.east) -- ($(alu.west)+(0,-0.55)$);
+  % --- komparator (odczepy rs1, rs2)
+  \fill (6.55,0.55) circle (1.3pt);
+  \fill (6.85,-0.55) circle (1.3pt);
+  \draw[szyna, ->] (6.55,0.55) -- (6.55,-2.55) -- ($(br.west)+(0,0.15)$);
+  \draw[szyna, ->] (6.85,-0.55) -- (6.85,-2.85) -- ($(br.west)+(0,-0.15)$);
+  % --- ALU -> pamięć -> WB
+  \draw[szyna, ->] (alu.east) -- node[above, sygnal]{alu\_y} (mem.west);
+  \draw[szyna, ->] (mem.east) -- node[above, sygnal, pos=0.45]{load} (wb.west);
+  \fill (10.55,0) circle (1.3pt);
+  \draw[szyna, ->] (10.55,0) -- (10.55,-1.3) -| ($(wb.south)+(-0.15,0)$);
+  \draw[szyna, <-] ($(wb.south)+(0.15,0)$) -- ++(0,-0.8) node[below, sygnal]{pc+4};
+  % --- zapis z WB do regfile
+  \draw[szyna, ->] (wb.east) -- ++(0.35,0) |- (5.9,2.2) -- ($(rf.north)+(0.5,0)$);
+  \node[sygnal, fill=white, inner sep=1pt] at (11.2,2.2) {wynik do rejestru rd};
+  % --- następny PC: imm, taken, alu_y
+  \draw[szyna, ->] (imm.south) -- (5.4,-3.55) -| ($(npc.south)+(-0.35,0)$);
+  \node[sygnal, fill=white, inner sep=1pt] at (4.0,-3.55) {imm};
+  \draw[szyna, ->] (br.south) -- (9.5,-3.85) -| (npc.south);
+  \node[sygnal, fill=white, inner sep=1pt] at (7.6,-3.85) {taken};
+  \fill (10.55,-1.3) circle (1.3pt);
+  \draw[szyna, ->] (10.55,-1.3) -- (10.55,-4.15) -| ($(npc.south)+(0.35,0)$);
+  \node[sygnal, fill=white, inner sep=1pt] at (8.5,-4.15) {alu\_y (jalr)};
+  \draw[szyna, ->] (npc.west) -- (-0.75,-2.6) |- (pc.west);
+  \node[sygnal, rotate=90] at (-1.0,-1.3) {pc+4 / pc+imm / alu\_y};
+  % --- sterowanie (przerywane)
+  \draw[ster] (ctrl.east) -| ($(ma.north)+(0.3,0)$);
+  \draw[ster] ($(ctrl.east)+(0,0.15)$) -| (alu.north);
+  \draw[ster] ($(ctrl.east)+(0,0.3)$) -| (wb.north);
+  \node[sygnal, text=pulapka, anchor=west] at (6.3,3.25) {sygnały sterujące (wb\_sel, alu\_op, \dots)};
+\end{tikzpicture}

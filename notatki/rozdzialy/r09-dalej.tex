@@ -1,0 +1,104 @@
+\chapter{Co dalej: projekty rozszerzające}
+\label{ch:dalej}
+
+\metryczka{wybrać kierunek dalszej pracy. Masz zweryfikowany procesor w dwóch
+mikroarchitekturach, emulator, infrastrukturę testową i toolchain C. Projekty
+poniżej są niezależne i wszystkie korzystają z narzędzi kursu.}{bez ograniczeń}{09-dalej/}
+
+\section{A. Rozszerzenie M (mnożenie i dzielenie)}
+\emph{Około 2 wieczorów.} Instrukcje \code{mul, mulh, mulhsu, mulhu, div, divu,
+rem, remu} w sprzęcie i porównanie wydajności z programowym \code{\_\_mulsi3}.
+\begin{enumerate}
+  \item Emulator: przypadek \code{funct7 = 0000001} dla opcode OP. Test:
+    \code{make -C ../04-isa-emulator emu-test-m}. Uwaga na dzielenie przez zero i
+    \code{INT\_MIN / -1}.
+  \item RTL w wersji prostej: operator \code{*} w ALU (1 takt). \code{make synth}
+    pokaże, ile kosztuje mnożarka.
+  \item Dzielenie iteracyjne w 32 taktach: potok musi czekać (stall z EX), aż
+    dzielnik skończy. To dobre ćwiczenie z wielocyklowych jednostek wykonawczych.
+  \item Testy: \plik{common/sw/tests\_m/m\_ext.S}, \code{make fuzz FUZZ\_FLAGS=--mext},
+    C z \code{ARCH=rv32im}, porównanie cykli \code{bench}.
+\end{enumerate}
+
+\section{B. CSR, wyjątki i przerwania}
+\emph{Około 4--6 wieczorów.} Celem jest procesor, na którym da się uruchomić RTOS.
+\begin{enumerate}
+  \item Zicsr: \code{csrrw/csrrs/csrrc} i rejestry \code{mcycle}, \code{minstret},
+    \code{mstatus}, \code{mtvec}, \code{mepc}, \code{mcause}, \code{mie}, \code{mip}.
+  \item Wyjątki: \code{ecall}, \code{ebreak}, nielegalna instrukcja (sygnał
+    \code{illegal} z dekodera już jest!), niewyrównany dostęp. Skok do \code{mtvec},
+    powrót przez \code{mret}.
+  \item W potoku wyjątek musi być \textbf{precyzyjny}: starsze instrukcje się
+    kończą, a młodsze zostają unieważnione.
+  \item Przerwanie od timera (\code{mtime}/\code{mtimecmp} jako MMIO).
+\end{enumerate}
+
+\section{C. Procesor na FPGA}
+\emph{Około 3--5 wieczorów i płytka.} Program w C wypisuje tekst z Twojego procesora
+przez UART do terminala na komputerze.
+
+Płytki z w pełni otwartym toolchainem (Yosys + nextpnr): \textbf{iCEBreaker} lub
+\textbf{iCESugar} (iCE40UP5K), \textbf{Tang Nano 9K/20K} (Gowin, Apicula),
+\textbf{ULX3S} lub \textbf{OrangeCrab} (ECP5).
+
+Co trzeba zmienić:
+\begin{itemize}
+  \item \textbf{Pamięć}: blokowy RAM w FPGA ma odczyt \emph{synchroniczny}. Procesor
+    jednocyklowy tego wprost nie zniesie, więc potrzebny jest odczyt na zboczu
+    opadającym, wersja wielocyklowa albo potok z adresem imem podawanym takt
+    wcześniej.
+  \item \textbf{UART}: \code{uart\_tx} z rozdziału 2 jako urządzenie MMIO z bitem
+    \code{busy} do odczytu.
+  \item \textbf{Zegar i reset}: PLL albo dzielnik, reset z przycisku przez
+    synchronizator.
+  \item \textbf{Timing}: nextpnr poda prawdziwą maksymalną częstotliwość, czyli
+    rzetelne porównanie procesora jednocyklowego z potokiem.
+\end{itemize}
+
+\section{D. Pamięć z opóźnieniem i cache}
+\emph{Około 4 wieczorów.} Interfejs \code{req/valid/ready} zamiast „magicznej”
+pamięci, stall całego potoku przy chybieniu, cache instrukcji direct-mapped z
+liniami 16 B i pomiar trafień na \code{bench}.
+
+\section{E. Weryfikacja formalna}
+\emph{Około 2--3 wieczorów.} \textbf{riscv-formal} z SymbiYosys dowodzi zgodności z
+ISA. Rdzeń wystawia interfejs \textbf{RVFI}, czyli rozszerzoną wersję Twojego
+\code{commit\_*}. Na początek wystarczą prostsze asercje SVA: „bańka nigdy nie ma
+\code{mem\_write}”, „po stallu w ID jest ta sama instrukcja”.
+
+\section{F. Oficjalne testy riscv-tests}
+\emph{Około 1 wieczoru.} Testy \code{rv32ui-p-*} z repozytorium
+\code{riscv-software-src/riscv-tests} używają tego samego protokołu TOHOST co my.
+Wymagają toolchainu GNU i dostosowania skryptu linkera do naszej mapy pamięci.
+
+\section{Lektura}
+
+\begin{itemize}
+  \item \textbf{Harris \& Harris}, \emph{Digital Design and Computer Architecture:
+    RISC-V Edition}. Rozdziały 5, 7 i 8 to ścieżka tego kursu z innej perspektywy.
+  \item \textbf{Patterson \& Hennessy}, \emph{Computer Organization and Design,
+    RISC-V Edition}. Klasyka, rozdział 4 o potoku.
+  \item \textbf{Hennessy \& Patterson}, \emph{Computer Architecture: A Quantitative
+    Approach}. Następny poziom: wykonanie poza kolejnością, predykcja, pamięć.
+  \item \textbf{The RISC-V Instruction Set Manual}, tomy I (Unprivileged) i II
+    (Privileged). Zaskakująco czytelne, z uzasadnieniami decyzji projektowych.
+  \item \textbf{Sutherland, Davidson, Flake}, \emph{SystemVerilog for Design}.
+\end{itemize}
+
+\section{Prawdziwe rdzenie do przeczytania}
+
+\begin{center}
+\small
+\begin{tabularx}{\linewidth}{@{}l X@{}}
+\toprule
+\textbf{PicoRV32} & jeden plik, wielocyklowy, nastawiony na mały rozmiar \\
+\textbf{SERV} & bit-serialny: 1 bit na takt, najmniejszy rdzeń RISC-V \\
+\textbf{Ibex} (lowRISC) & 2--3 etapy, jakość produkcyjna, świetna dokumentacja weryfikacji \\
+\textbf{VexRiscv} & konfigurowalny potok w SpinalHDL \\
+\textbf{CVA6} & 64-bitowy, 6 etapów, uruchamia Linuksa \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+Porównaj ich decyzje ze swoimi: gdzie rozstrzygają skoki, jak zbudowany jest bank
+rejestrów i jak obsługują pamięć.
